@@ -7,6 +7,7 @@ import { cn } from '@/lib/utils';
 const navItems = [
   { href: '/', label: 'Dashboard' },
   { href: '/matchups', label: 'Matchups' },
+  { href: '/draft', label: 'Draft' },
   { href: '/trades', label: 'Trades' },
   { href: '/history', label: 'History' },
   { href: '/settings', label: 'Settings' },

@@ -14,10 +14,8 @@ import { fetchFantasyCalcValues } from '@/lib/rankings';
 import {
   fetchHistoricalValues,
   buildPlayerNameMapping,
-  getHistoricalPickValue,
-  getCurrentPlayerValue,
-  HistoricalValueData,
 } from '@/lib/historicalValues';
+import { resolveDraftPickValue } from '@/lib/draftValues';
 import { ordinalSuffix, getPositionTextColor, getTeamName } from '@/lib/utils';
 import Image from 'next/image';
 import { SleeperDraft, SleeperDraftPick, SleeperUser, SleeperRoster, SleeperPlayersMap } from '@/lib/types';
@@ -86,24 +84,12 @@ function getPickTier(pickInRound: number, numTeams: number): 'Early' | 'Mid' | '
   }
 }
 
-// Fallback pick value estimation (only used when historical data unavailable)
-function estimatePickValue(round: number): number {
-  const values: Record<number, number> = {
-    1: 7000,
-    2: 4000,
-    3: 2000,
-    4: 1000,
-    5: 500,
-  };
-  return values[round] || 250;
-}
-
 async function getAllDraftData(currentLeagueId: string): Promise<SeasonDraftData[]> {
   const allDraftData: SeasonDraftData[] = [];
   const leagueChain = await getLeagueHistory(currentLeagueId);
 
   // Fetch player values and historical data
-  const [{ playerValues: fantasyCalcValues }, players, historicalData] = await Promise.all([
+  const [{ playerValues: fcPlayerValues, pickValues: fcPickValues }, players, historicalData] = await Promise.all([
     fetchFantasyCalcValues(),
     getAllPlayers(),
     fetchHistoricalValues(),
@@ -139,31 +125,19 @@ async function getAllDraftData(currentLeagueId: string): Promise<SeasonDraftData
             const pickInRound = ((pick.pick_no - 1) % numTeams) + 1;
             const tier = getPickTier(pickInRound, numTeams);
 
-            // Get pick value at draft time from historical data
-            let pickValue = getHistoricalPickValue(
-              draft.season,
-              pick.round,
-              draftTime,
-              historicalData,
-              tier
+            // Pick cost and player value resolved from a single source so
+            // the diff never compares two different market scales
+            const { pickValue, currentValue } = resolveDraftPickValue(
+              {
+                season: draft.season,
+                round: pick.round,
+                pickInRound,
+                tier,
+                draftTime,
+                playerId: pick.player_id,
+              },
+              { historicalData, playerMapping, fcPlayerValues, fcPickValues }
             );
-
-            // Fallback to estimate if no historical data
-            if (pickValue === null || pickValue === 0) {
-              pickValue = estimatePickValue(pick.round);
-            }
-
-            // Get current player value - prefer historical data, fallback to FantasyCalc
-            let currentValue = getCurrentPlayerValue(
-              pick.player_id,
-              historicalData,
-              playerMapping
-            );
-
-            // Fallback to FantasyCalc if no historical data for this player
-            if (currentValue === null || currentValue === 0) {
-              currentValue = fantasyCalcValues.get(pick.player_id) || 0;
-            }
 
             return {
               ...pick,

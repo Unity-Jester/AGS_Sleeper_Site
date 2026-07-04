@@ -1,4 +1,4 @@
-import { SleeperTransaction, SleeperRoster, SleeperUser, SleeperPlayersMap } from '@/lib/types';
+import { SleeperTransaction, SleeperRoster, SleeperUser, SleeperPlayersMap, TradeValueSwing } from '@/lib/types';
 import { getUserByOwnerId, getPlayerAvatarUrl, getUserAvatarUrl } from '@/lib/sleeper';
 import { timeAgo, cn, getTeamName as teamDisplayName } from '@/lib/utils';
 import Image from 'next/image';
@@ -8,9 +8,33 @@ interface TransactionCardProps {
   rosters: SleeperRoster[];
   users: SleeperUser[];
   players: SleeperPlayersMap;
+  tradeValues?: TradeValueSwing[];
 }
 
-export default function TransactionCard({ transaction, rosters, users, players }: TransactionCardProps) {
+function formatNet(value: number): string {
+  const abs = Math.abs(Math.round(value)).toLocaleString();
+  return value > 0 ? `+${abs}` : value < 0 ? `-${abs}` : '0';
+}
+
+// Compact value-swing chip shown next to each side of a trade
+function ValueSwingChip({ swing }: { swing: TradeValueSwing }) {
+  const color =
+    swing.netAverage > 0
+      ? 'text-sleeper-green bg-sleeper-green/10'
+      : swing.netAverage < 0
+        ? 'text-sleeper-red bg-sleeper-red/10'
+        : 'text-gray-400 bg-white/[0.06]';
+  return (
+    <span
+      className={`ml-auto shrink-0 px-2 py-0.5 rounded text-xs font-medium tabular-nums ${color}`}
+      title={`Net value - at trade: ${formatNet(swing.netAtTrade)} · today: ${formatNet(swing.netCurrent)}`}
+    >
+      {formatNet(swing.netAverage)}
+    </span>
+  );
+}
+
+export default function TransactionCard({ transaction, rosters, users, players, tradeValues }: TransactionCardProps) {
   const getTeamName = (rosterId: number) => {
     const roster = rosters.find(r => r.roster_id === rosterId);
     if (!roster) return `Team ${rosterId}`;
@@ -68,6 +92,10 @@ export default function TransactionCard({ transaction, rosters, users, players }
                 <span className="text-sm font-medium text-white">
                   {getTeamName(rosterId)} receives:
                 </span>
+                {(() => {
+                  const swing = tradeValues?.find(v => v.rosterId === rosterId);
+                  return swing ? <ValueSwingChip swing={swing} /> : null;
+                })()}
               </div>
 
               <div className="ml-8 space-y-1">

@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useMemo } from 'react';
-import { SleeperTransaction, SleeperRoster, SleeperUser, SleeperPlayersMap } from '@/lib/types';
+import { SleeperTransaction, SleeperRoster, SleeperUser, SleeperPlayersMap, TradeValueMap } from '@/lib/types';
 import TransactionCard from './TransactionCard';
 
 interface SeasonTradesData {
@@ -16,9 +16,10 @@ interface TradeHistoryProps {
   seasonTrades: SeasonTradesData[];
   players: SleeperPlayersMap;
   currentSeason: string;
+  tradeValues?: TradeValueMap;
 }
 
-export default function TradeHistory({ seasonTrades, players, currentSeason }: TradeHistoryProps) {
+export default function TradeHistory({ seasonTrades, players, currentSeason, tradeValues }: TradeHistoryProps) {
   // Current season is expanded by default
   const [expandedSeasons, setExpandedSeasons] = useState<Set<string>>(new Set([currentSeason]));
   const [searchTerm, setSearchTerm] = useState('');
@@ -169,6 +170,7 @@ export default function TradeHistory({ seasonTrades, players, currentSeason }: T
                         rosters={rosters}
                         users={users}
                         players={players}
+                        tradeValues={tradeValues?.[trade.transaction_id]}
                       />
                     ))
                   ) : (

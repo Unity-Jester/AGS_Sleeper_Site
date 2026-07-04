@@ -422,6 +422,18 @@ export interface TradePartner {
   netValue: number;
 }
 
+// Per-roster value swing for one trade, in a client-serializable shape.
+// Derived from the TradeAnalysis objects already computed for report cards.
+export interface TradeValueSwing {
+  rosterId: number;
+  netAtTrade: number;
+  netCurrent: number;
+  netAverage: number;
+}
+
+// Keyed by transaction_id
+export type TradeValueMap = Record<string, TradeValueSwing[]>;
+
 export interface TeamReportCard {
   rosterId: number;
   ownerId: string;

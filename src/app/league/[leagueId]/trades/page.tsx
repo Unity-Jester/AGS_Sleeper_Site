@@ -10,7 +10,7 @@ import {
 import { fetchFantasyCalcValues } from '@/lib/rankings';
 import { generateAllReportCards } from '@/lib/tradeAnalysis';
 import { fetchHistoricalValues, buildPlayerNameMapping } from '@/lib/historicalValues';
-import { FantasyCalcSettings, SleeperTransaction } from '@/lib/types';
+import { FantasyCalcSettings, SleeperTransaction, TradeValueMap } from '@/lib/types';
 import TradeAnalyzer from '@/components/TradeAnalyzer';
 import ErrorState from '@/components/ErrorState';
 import TradeHistory from '@/components/TradeHistory';
@@ -96,6 +96,20 @@ export default async function TradesPage({ params }: LeaguePageProps) {
       playerMapping
     );
 
+    // Reuse the per-trade analyses already computed for the report cards
+    // to annotate the trade history - no extra fetching or analysis.
+    const tradeValues: TradeValueMap = {};
+    for (const card of reportCards) {
+      for (const trade of card.trades) {
+        (tradeValues[trade.tradeId] ??= []).push({
+          rosterId: card.rosterId,
+          netAtTrade: trade.netValue.historical,
+          netCurrent: trade.netValue.current,
+          netAverage: trade.netValue.average,
+        });
+      }
+    }
+
     // Client components below receive a slimmed players map: full player
     // data is ~5MB and would be serialized into the page payload.
     const tradedPlayerIds = allTrades.flatMap(t => [
@@ -141,6 +155,7 @@ export default async function TradesPage({ params }: LeaguePageProps) {
           seasonTrades={allSeasonTrades}
           players={clientPlayers}
           currentSeason={league.season}
+          tradeValues={tradeValues}
         />
       </div>
     );

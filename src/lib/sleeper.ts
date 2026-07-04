@@ -163,21 +163,49 @@ export function pairMatchups(
   return pairs;
 }
 
-// Get all transactions for a season
+// Get all transactions for a season (all weeks fetched concurrently)
 export async function getAllSeasonTransactions(leagueId: string, maxWeek: number = 18): Promise<SleeperTransaction[]> {
-  const allTransactions: SleeperTransaction[] = [];
+  const weeks = Array.from({ length: maxWeek }, (_, i) => i + 1);
+  const results = await Promise.all(
+    weeks.map(week => getLeagueTransactions(leagueId, week).catch(() => [] as SleeperTransaction[]))
+  );
+  return results.flat();
+}
 
-  for (let week = 1; week <= maxWeek; week++) {
-    try {
-      const weekTransactions = await getLeagueTransactions(leagueId, week);
-      allTransactions.push(...weekTransactions);
-    } catch {
-      // Week might not exist yet
-      break;
+// Build a slimmed players map that is safe to serialize into client
+// components. The full Sleeper players payload is ~5MB; client UIs only
+// need a handful of fields for active players plus any explicitly
+// referenced IDs (rostered players, trade participants, drafted players).
+export function buildClientPlayersMap(
+  players: SleeperPlayersMap,
+  extraIds: Iterable<string> = []
+): SleeperPlayersMap {
+  const slim: SleeperPlayersMap = {};
+
+  const addPlayer = (id: string) => {
+    const p = players[id];
+    if (!p || slim[id]) return;
+    slim[id] = {
+      player_id: id,
+      full_name: p.full_name,
+      position: p.position,
+      team: p.team,
+      fantasy_positions: p.fantasy_positions,
+      search_rank: p.search_rank,
+      age: p.age,
+    } as SleeperPlayersMap[string];
+  };
+
+  for (const [id, p] of Object.entries(players)) {
+    if (p.full_name && p.team && p.fantasy_positions?.length > 0) {
+      addPlayer(id);
     }
   }
+  for (const id of extraIds) {
+    addPlayer(id);
+  }
 
-  return allTransactions;
+  return slim;
 }
 
 // Get trades only
@@ -195,35 +223,34 @@ export interface SeasonTrades {
   rosters: SleeperRoster[];
 }
 
-// Get all trades from all historical seasons
+// Get all trades from all historical seasons. The league chain must be
+// walked serially, but each season's data is fetched concurrently.
 export async function getAllHistoricalTrades(currentLeagueId: string): Promise<SeasonTrades[]> {
-  const allSeasonTrades: SeasonTrades[] = [];
-  let currentId: string | null = currentLeagueId;
+  const leagueChain = await getLeagueHistory(currentLeagueId);
 
-  while (currentId) {
-    try {
-      const leagueData = await getLeague(currentId);
-      const [users, rosters, trades] = await Promise.all([
-        getLeagueUsers(currentId),
-        getLeagueRosters(currentId),
-        getLeagueTrades(currentId),
-      ]);
+  const seasons = await Promise.all(
+    leagueChain.map(async (leagueData): Promise<SeasonTrades | null> => {
+      try {
+        const [users, rosters, trades] = await Promise.all([
+          getLeagueUsers(leagueData.league_id),
+          getLeagueRosters(leagueData.league_id),
+          getLeagueTrades(leagueData.league_id),
+        ]);
 
-      allSeasonTrades.push({
-        season: leagueData.season,
-        leagueId: leagueData.league_id,
-        trades: trades.sort((a, b) => b.created - a.created),
-        users,
-        rosters,
-      });
+        return {
+          season: leagueData.season,
+          leagueId: leagueData.league_id,
+          trades: trades.sort((a, b) => b.created - a.created),
+          users,
+          rosters,
+        };
+      } catch {
+        return null;
+      }
+    })
+  );
 
-      currentId = leagueData.previous_league_id;
-    } catch {
-      break;
-    }
-  }
-
-  return allSeasonTrades;
+  return seasons.filter((s): s is SeasonTrades => s !== null);
 }
 
 // Draft pick to player mapping (what picks became)
@@ -240,37 +267,34 @@ export interface DraftedPlayer {
 export async function getAllHistoricalDrafts(currentLeagueId: string): Promise<Map<string, DraftedPlayer>> {
   // Map key format: "season_round_rosterId" -> DraftedPlayer
   const draftMap = new Map<string, DraftedPlayer>();
-  let leagueId: string | null = currentLeagueId;
+  const leagueChain = await getLeagueHistory(currentLeagueId);
 
-  while (leagueId) {
-    try {
-      const league = await getLeague(leagueId);
-      const drafts = await getLeagueDrafts(leagueId);
+  const allDrafts = (
+    await Promise.all(
+      leagueChain.map(league => getLeagueDrafts(league.league_id).catch(() => [] as SleeperDraft[]))
+    )
+  ).flat();
 
-      for (const draft of drafts) {
-        try {
-          const picks = await getDraftPicks(draft.draft_id);
-          for (const pick of picks) {
-            const key = `${draft.season}_${pick.round}_${pick.roster_id}`;
-            draftMap.set(key, {
-              season: draft.season,
-              round: pick.round,
-              pick: pick.pick_no,
-              rosterId: pick.roster_id,
-              playerId: pick.player_id,
-              playerName: pick.metadata?.first_name && pick.metadata?.last_name
-                ? `${pick.metadata.first_name} ${pick.metadata.last_name}`
-                : pick.player_id,
-            });
-          }
-        } catch {
-          // Draft picks might not be available
-        }
-      }
+  const draftsWithPicks = await Promise.all(
+    allDrafts.map(async draft => ({
+      draft,
+      picks: await getDraftPicks(draft.draft_id).catch(() => [] as SleeperDraftPick[]),
+    }))
+  );
 
-      leagueId = league.previous_league_id;
-    } catch {
-      break;
+  for (const { draft, picks } of draftsWithPicks) {
+    for (const pick of picks) {
+      const key = `${draft.season}_${pick.round}_${pick.roster_id}`;
+      draftMap.set(key, {
+        season: draft.season,
+        round: pick.round,
+        pick: pick.pick_no,
+        rosterId: pick.roster_id,
+        playerId: pick.player_id,
+        playerName: pick.metadata?.first_name && pick.metadata?.last_name
+          ? `${pick.metadata.first_name} ${pick.metadata.last_name}`
+          : pick.player_id,
+      });
     }
   }
 
@@ -345,109 +369,100 @@ export async function getHeadToHeadRecords(
 ): Promise<Map<string, HeadToHeadRecord>> {
   const h2hMap = new Map<string, HeadToHeadRecord>();
 
-  // Get all historical league IDs
-  const leagueIds: string[] = [];
-  let leagueId: string | null = currentLeagueId;
+  // Walk the league chain once, then fetch each season's rosters and
+  // matchup weeks concurrently instead of one request at a time.
+  const leagueChain = await getLeagueHistory(currentLeagueId).catch(() => [] as SleeperLeague[]);
 
-  while (leagueId) {
-    leagueIds.push(leagueId);
-    try {
-      const league = await getLeague(leagueId);
-      leagueId = league.previous_league_id;
-    } catch {
-      break;
-    }
-  }
+  const seasons = await Promise.all(
+    leagueChain.map(async league => {
+      try {
+        const totalWeeks = league.settings.playoff_week_start + 2;
+        const weeks = Array.from({ length: totalWeeks }, (_, i) => i + 1);
+        const [rosters, weeklyMatchups] = await Promise.all([
+          getLeagueRosters(league.league_id),
+          Promise.all(
+            weeks.map(week =>
+              getLeagueMatchups(league.league_id, week).catch(() => [] as SleeperMatchup[])
+            )
+          ),
+        ]);
+        return { rosters, weeklyMatchups };
+      } catch {
+        return null;
+      }
+    })
+  );
 
-  // For each league, get all matchups
-  for (const lid of leagueIds) {
-    try {
-      const [league, rosters] = await Promise.all([
-        getLeague(lid),
-        getLeagueRosters(lid),
-      ]);
+  for (const season of seasons) {
+    if (!season) continue;
 
-      // Build roster_id to owner_id map
-      const rosterToOwner = new Map<number, string>();
-      rosters.forEach(r => {
-        if (r.owner_id) {
-          rosterToOwner.set(r.roster_id, r.owner_id);
+    // Build roster_id to owner_id map
+    const rosterToOwner = new Map<number, string>();
+    season.rosters.forEach(r => {
+      if (r.owner_id) {
+        rosterToOwner.set(r.roster_id, r.owner_id);
+      }
+    });
+
+    for (const matchups of season.weeklyMatchups) {
+      // Group matchups by matchup_id
+      const matchupGroups = new Map<number, typeof matchups>();
+          matchups.forEach(m => {
+        if (m.matchup_id) {
+          const group = matchupGroups.get(m.matchup_id) || [];
+          group.push(m);
+          matchupGroups.set(m.matchup_id, group);
         }
       });
 
-      // Get matchups for all weeks (regular season + playoffs)
-      const totalWeeks = league.settings.playoff_week_start + 2;
+      // Process each matchup
+      matchupGroups.forEach(group => {
+        if (group.length === 2) {
+          const [m1, m2] = group;
+          const owner1 = rosterToOwner.get(m1.roster_id);
+          const owner2 = rosterToOwner.get(m2.roster_id);
 
-      for (let week = 1; week <= totalWeeks; week++) {
-        try {
-          const matchups = await getLeagueMatchups(lid, week);
+          if (owner1 && owner2 && owner1 !== owner2) {
+            // Create consistent key (alphabetically sorted)
+            const key = [owner1, owner2].sort().join('_');
+            const record = h2hMap.get(key) || {
+              owner1Wins: 0,
+              owner2Wins: 0,
+              ties: 0,
+              owner1Points: 0,
+              owner2Points: 0,
+              matchups: 0,
+            };
 
-          // Group matchups by matchup_id
-          const matchupGroups = new Map<number, typeof matchups>();
-          matchups.forEach(m => {
-            if (m.matchup_id) {
-              const group = matchupGroups.get(m.matchup_id) || [];
-              group.push(m);
-              matchupGroups.set(m.matchup_id, group);
-            }
-          });
+            const points1 = m1.points || 0;
+            const points2 = m2.points || 0;
 
-          // Process each matchup
-          matchupGroups.forEach(group => {
-            if (group.length === 2) {
-              const [m1, m2] = group;
-              const owner1 = rosterToOwner.get(m1.roster_id);
-              const owner2 = rosterToOwner.get(m2.roster_id);
+            // Only count if there are actual points (game was played)
+            if (points1 > 0 || points2 > 0) {
+              record.matchups++;
 
-              if (owner1 && owner2 && owner1 !== owner2) {
-                // Create consistent key (alphabetically sorted)
-                const key = [owner1, owner2].sort().join('_');
-                const record = h2hMap.get(key) || {
-                  owner1Wins: 0,
-                  owner2Wins: 0,
-                  ties: 0,
-                  owner1Points: 0,
-                  owner2Points: 0,
-                  matchups: 0,
-                };
+              // Determine which owner is "owner1" in the sorted key
+              const isOwner1First = [owner1, owner2].sort()[0] === owner1;
 
-                const points1 = m1.points || 0;
-                const points2 = m2.points || 0;
-
-                // Only count if there are actual points (game was played)
-                if (points1 > 0 || points2 > 0) {
-                  record.matchups++;
-
-                  // Determine which owner is "owner1" in the sorted key
-                  const isOwner1First = [owner1, owner2].sort()[0] === owner1;
-
-                  if (isOwner1First) {
-                    record.owner1Points += points1;
-                    record.owner2Points += points2;
-                    if (points1 > points2) record.owner1Wins++;
-                    else if (points2 > points1) record.owner2Wins++;
-                    else record.ties++;
-                  } else {
-                    record.owner1Points += points2;
-                    record.owner2Points += points1;
-                    if (points2 > points1) record.owner1Wins++;
-                    else if (points1 > points2) record.owner2Wins++;
-                    else record.ties++;
-                  }
-
-                  h2hMap.set(key, record);
-                }
+              if (isOwner1First) {
+                record.owner1Points += points1;
+                record.owner2Points += points2;
+                if (points1 > points2) record.owner1Wins++;
+                else if (points2 > points1) record.owner2Wins++;
+                else record.ties++;
+              } else {
+                record.owner1Points += points2;
+                record.owner2Points += points1;
+                if (points2 > points1) record.owner1Wins++;
+                else if (points1 > points2) record.owner2Wins++;
+                else record.ties++;
               }
+
+              h2hMap.set(key, record);
             }
-          });
-        } catch {
-          // Week might not exist
-          break;
+          }
         }
-      }
-    } catch {
-      // League might not be accessible
-      continue;
+      });
     }
   }
 

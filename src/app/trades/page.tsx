@@ -5,6 +5,7 @@ import {
   getAllPlayers,
   getAllHistoricalTrades,
   getAllHistoricalDrafts,
+  buildClientPlayersMap,
 } from '@/lib/sleeper';
 import { getLeagueId } from '@/lib/utils';
 import { fetchFantasyCalcValues } from '@/lib/rankings';
@@ -15,6 +16,9 @@ import TradeAnalyzer from '@/components/TradeAnalyzer';
 import TradeHistory from '@/components/TradeHistory';
 import TradeReportCards from '@/components/TradeReportCard';
 
+// Rendered on demand: build-time prerendering of this page broke Vercel
+// deploys. Underlying Sleeper/FantasyCalc fetches are cached via
+// next.revalidate, so per-request cost is recomputation, not network.
 export const dynamic = 'force-dynamic';
 
 // Derive fantasy calc settings from Sleeper league data
@@ -96,6 +100,18 @@ export default async function TradesPage() {
       playerMapping
     );
 
+    // Client components below receive a slimmed players map: full player
+    // data is ~5MB and would be serialized into the page payload.
+    const tradedPlayerIds = allTrades.flatMap(t => [
+      ...Object.keys(t.adds || {}),
+      ...Object.keys(t.drops || {}),
+    ]);
+    const rosteredPlayerIds = rosters.flatMap(r => r.players || []);
+    const clientPlayers = buildClientPlayersMap(players, [
+      ...tradedPlayerIds,
+      ...rosteredPlayerIds,
+    ]);
+
     return (
       <div className="space-y-8">
         <div>
@@ -105,7 +121,7 @@ export default async function TradesPage() {
 
         {/* Trade Analyzer */}
         <TradeAnalyzer
-          players={players}
+          players={clientPlayers}
           rosters={rosters}
           users={users}
           playerValues={playerValuesObj}
@@ -118,7 +134,7 @@ export default async function TradesPage() {
         {/* Trade History - All Seasons */}
         <TradeHistory
           seasonTrades={allSeasonTrades}
-          players={players}
+          players={clientPlayers}
           currentSeason={league.season}
         />
       </div>

@@ -165,7 +165,7 @@ function createAssetValue(historical: number, current: number): TradeAssetValue 
 }
 
 // Build pick ownership chain to track what happened to picks after trades
-interface PickOwnershipInfo {
+export interface PickOwnershipInfo {
   finalOwnerId: number;
   wasUsedInDraft: boolean;
   draftedPlayer: DraftedPlayer | null;
@@ -652,13 +652,14 @@ export function generateTeamReportCard(
   pickValues: Record<string, number>,
   draftMap: Map<string, DraftedPlayer> | null = null,
   historicalData: HistoricalValueData | null = null,
-  playerMapping: Map<string, string> | null = null
+  playerMapping: Map<string, string> | null = null,
+  prebuiltPickOwnershipMap: Map<string, PickOwnershipInfo> | null = null
 ): TeamReportCard {
   const roster = rosters.find(r => r.roster_id === rosterId);
   const user = roster ? users.find(u => u.user_id === roster.owner_id) : null;
   const teamName = user?.metadata?.team_name || user?.display_name || user?.username || `Team ${rosterId}`;
 
-  const pickOwnershipMap = buildPickOwnershipMap(allTrades, draftMap);
+  const pickOwnershipMap = prebuiltPickOwnershipMap ?? buildPickOwnershipMap(allTrades, draftMap);
 
   const trades: TradeAnalysis[] = [];
   for (const trade of allTrades) {
@@ -729,6 +730,9 @@ export function generateAllReportCards(
 ): TeamReportCard[] {
   const reportCards: TeamReportCard[] = [];
 
+  // Built once here; rebuilding per roster is O(teams x trades) of wasted work
+  const pickOwnershipMap = buildPickOwnershipMap(allTrades, draftMap);
+
   for (const roster of rosters) {
     const reportCard = generateTeamReportCard(
       roster.roster_id,
@@ -740,7 +744,8 @@ export function generateAllReportCards(
       pickValues,
       draftMap,
       historicalData,
-      playerMapping
+      playerMapping,
+      pickOwnershipMap
     );
     reportCards.push(reportCard);
   }

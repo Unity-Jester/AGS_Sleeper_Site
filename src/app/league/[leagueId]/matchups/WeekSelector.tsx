@@ -1,6 +1,6 @@
 'use client';
 
-import { useRouter, useSearchParams } from 'next/navigation';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { cn } from '@/lib/utils';
 
 interface WeekSelectorProps {
@@ -12,6 +12,7 @@ interface WeekSelectorProps {
 
 export default function WeekSelector({ currentWeek, totalWeeks, playoffStart, seasonParam }: WeekSelectorProps) {
   const router = useRouter();
+  const pathname = usePathname();
   const searchParams = useSearchParams();
 
   const handleWeekChange = (week: number) => {
@@ -26,7 +27,7 @@ export default function WeekSelector({ currentWeek, totalWeeks, playoffStart, se
         params.set('season', existingSeason);
       }
     }
-    router.push(`/matchups?${params.toString()}`);
+    router.push(`${pathname}?${params.toString()}`);
   };
 
   const weeks = Array.from({ length: totalWeeks }, (_, i) => i + 1);

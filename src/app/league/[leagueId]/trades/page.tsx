@@ -7,7 +7,6 @@ import {
   getAllHistoricalDrafts,
   buildClientPlayersMap,
 } from '@/lib/sleeper';
-import { getLeagueId } from '@/lib/utils';
 import { fetchFantasyCalcValues } from '@/lib/rankings';
 import { generateAllReportCards } from '@/lib/tradeAnalysis';
 import { fetchHistoricalValues, buildPlayerNameMapping } from '@/lib/historicalValues';
@@ -45,16 +44,12 @@ function deriveLeagueSettings(
   };
 }
 
-export default async function TradesPage() {
-  const leagueId = getLeagueId();
+interface LeaguePageProps {
+  params: { leagueId: string };
+}
 
-  if (!leagueId || leagueId === 'your_league_id_here') {
-    return (
-      <div className="text-center py-12">
-        <p className="text-gray-400">Please configure your League ID first.</p>
-      </div>
-    );
-  }
+export default async function TradesPage({ params }: LeaguePageProps) {
+  const { leagueId } = params;
 
   try {
     // Fetch all data in parallel

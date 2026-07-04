@@ -1,18 +1,13 @@
 import { getLeague, getLeagueUsers } from '@/lib/sleeper';
-import { getLeagueId } from '@/lib/utils';
 
 export const revalidate = 3600; // Revalidate every hour
 
-export default async function SettingsPage() {
-  const leagueId = getLeagueId();
+interface LeaguePageProps {
+  params: { leagueId: string };
+}
 
-  if (!leagueId || leagueId === 'your_league_id_here') {
-    return (
-      <div className="text-center py-12">
-        <p className="text-gray-400">Please configure your League ID first.</p>
-      </div>
-    );
-  }
+export default async function SettingsPage({ params }: LeaguePageProps) {
+  const { leagueId } = params;
 
   try {
     const [league, users] = await Promise.all([

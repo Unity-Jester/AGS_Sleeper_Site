@@ -6,12 +6,12 @@ import { useEffect, useState } from 'react';
 import { cn } from '@/lib/utils';
 
 const navItems = [
-  { href: '/', label: 'Dashboard' },
-  { href: '/matchups', label: 'Matchups' },
-  { href: '/draft', label: 'Draft' },
-  { href: '/trades', label: 'Trades' },
-  { href: '/history', label: 'History' },
-  { href: '/settings', label: 'Settings' },
+  { path: '', label: 'Dashboard' },
+  { path: '/matchups', label: 'Matchups' },
+  { path: '/draft', label: 'Draft' },
+  { path: '/trades', label: 'Trades' },
+  { path: '/history', label: 'History' },
+  { path: '/settings', label: 'Settings' },
 ];
 
 export default function Navigation() {
@@ -22,6 +22,14 @@ export default function Navigation() {
   useEffect(() => {
     setMenuOpen(false);
   }, [pathname]);
+
+  // League pages live under /league/[leagueId]; outside a league there is
+  // nothing to link to except the picker.
+  const leagueMatch = pathname.match(/^\/league\/([^/]+)/);
+  const base = leagueMatch ? `/league/${leagueMatch[1]}` : null;
+  const links = base
+    ? navItems.map(item => ({ href: `${base}${item.path}`, label: item.label }))
+    : [];
 
   return (
     <nav className="bg-sleeper-darker border-b border-gray-800">
@@ -40,7 +48,7 @@ export default function Navigation() {
 
           {/* Desktop nav */}
           <div className="hidden md:flex items-center gap-1">
-            {navItems.map((item) => {
+            {links.map((item) => {
               const isActive = pathname === item.href;
               return (
                 <Link
@@ -57,6 +65,13 @@ export default function Navigation() {
                 </Link>
               );
             })}
+            <Link
+              href="/start"
+              className="ml-2 px-3 py-2 rounded-md text-sm font-medium text-gray-500 hover:bg-gray-800 hover:text-white transition-colors"
+              title="Switch league"
+            >
+              {base ? 'Switch League' : 'Find a League'}
+            </Link>
           </div>
 
           {/* Mobile hamburger */}
@@ -83,7 +98,7 @@ export default function Navigation() {
       {/* Mobile menu panel */}
       {menuOpen && (
         <div className="md:hidden border-t border-gray-800 px-4 py-3 space-y-1">
-          {navItems.map((item) => {
+          {links.map((item) => {
             const isActive = pathname === item.href;
             return (
               <Link
@@ -100,6 +115,12 @@ export default function Navigation() {
               </Link>
             );
           })}
+          <Link
+            href="/start"
+            className="block px-3 py-2 rounded-md text-base font-medium text-gray-500 hover:bg-gray-800 hover:text-white transition-colors"
+          >
+            {base ? 'Switch League' : 'Find a League'}
+          </Link>
         </div>
       )}
     </nav>

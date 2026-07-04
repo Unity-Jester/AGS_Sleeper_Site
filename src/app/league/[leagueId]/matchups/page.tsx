@@ -9,7 +9,6 @@ import {
   getHeadToHeadRecords,
   getH2HForOwners,
 } from '@/lib/sleeper';
-import { getLeagueId } from '@/lib/utils';
 import Matchup from '@/components/Matchup';
 import ErrorState from '@/components/ErrorState';
 import WeekSelector from './WeekSelector';
@@ -17,20 +16,13 @@ import WeekSelector from './WeekSelector';
 export const revalidate = 60;
 
 interface MatchupsPageProps {
+  params: { leagueId: string };
   searchParams: Promise<{ week?: string; season?: string }>;
 }
 
-export default async function MatchupsPage({ searchParams }: MatchupsPageProps) {
+export default async function MatchupsPage({ params: routeParams, searchParams }: MatchupsPageProps) {
   const params = await searchParams;
-  const leagueId = getLeagueId();
-
-  if (!leagueId || leagueId === 'your_league_id_here') {
-    return (
-      <div className="text-center py-12">
-        <p className="text-gray-400">Please configure your League ID first.</p>
-      </div>
-    );
-  }
+  const { leagueId } = routeParams;
 
   try {
     const [currentLeague, nflState, players] = await Promise.all([
@@ -85,7 +77,7 @@ export default async function MatchupsPage({ searchParams }: MatchupsPageProps) 
             {isPreseason && currentLeague.previous_league_id && (
               <div className="flex rounded-lg overflow-hidden border border-gray-700">
                 <a
-                  href={`/matchups?season=previous`}
+                  href="?season=previous"
                   className={`px-3 py-1.5 text-sm ${
                     showPreviousSeason
                       ? 'bg-sleeper-accent text-sleeper-dark'
@@ -95,7 +87,7 @@ export default async function MatchupsPage({ searchParams }: MatchupsPageProps) 
                   {parseInt(currentLeague.season) - 1}
                 </a>
                 <a
-                  href={`/matchups?season=current`}
+                  href="?season=current"
                   className={`px-3 py-1.5 text-sm ${
                     !showPreviousSeason
                       ? 'bg-sleeper-accent text-sleeper-dark'
@@ -142,7 +134,7 @@ export default async function MatchupsPage({ searchParams }: MatchupsPageProps) 
                 <p className="text-sm text-gray-500 mt-2">
                   The {currentLeague.season} season hasn&apos;t started yet.
                   {currentLeague.previous_league_id && (
-                    <a href="/matchups?season=previous" className="text-sleeper-accent ml-1 hover:underline">
+                    <a href="?season=previous" className="text-sleeper-accent ml-1 hover:underline">
                       View last season&apos;s matchups
                     </a>
                   )}

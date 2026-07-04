@@ -18,7 +18,7 @@ import {
   getCurrentPlayerValue,
   HistoricalValueData,
 } from '@/lib/historicalValues';
-import { getLeagueId, ordinalSuffix, getPositionTextColor, getTeamName } from '@/lib/utils';
+import { ordinalSuffix, getPositionTextColor, getTeamName } from '@/lib/utils';
 import Image from 'next/image';
 import { SleeperDraft, SleeperDraftPick, SleeperUser, SleeperRoster, SleeperPlayersMap } from '@/lib/types';
 import CollapsibleSection from '@/components/CollapsibleSection';
@@ -335,16 +335,12 @@ function getValueColor(diff: number): string {
   return 'text-sleeper-red';
 }
 
-export default async function DraftPage() {
-  const leagueId = getLeagueId();
+interface LeaguePageProps {
+  params: { leagueId: string };
+}
 
-  if (!leagueId || leagueId === 'your_league_id_here') {
-    return (
-      <div className="text-center py-12">
-        <p className="text-gray-400">Please configure your League ID first.</p>
-      </div>
-    );
-  }
+export default async function DraftPage({ params }: LeaguePageProps) {
+  const { leagueId } = params;
 
   try {
     const [league, draftData] = await Promise.all([

@@ -11,7 +11,7 @@ import {
 } from '@/lib/sleeper';
 import H2HGrid from '@/components/H2HGrid';
 import ErrorState from '@/components/ErrorState';
-import { getLeagueId, ordinalSuffix, getTeamName } from '@/lib/utils';
+import { ordinalSuffix, getTeamName } from '@/lib/utils';
 import Image from 'next/image';
 import { SleeperLeague, SleeperUser, SleeperRoster } from '@/lib/types';
 
@@ -76,16 +76,12 @@ async function getSeasonData(leagueId: string): Promise<SeasonData | null> {
   }
 }
 
-export default async function HistoryPage() {
-  const leagueId = getLeagueId();
+interface LeaguePageProps {
+  params: { leagueId: string };
+}
 
-  if (!leagueId || leagueId === 'your_league_id_here') {
-    return (
-      <div className="text-center py-12">
-        <p className="text-gray-400">Please configure your League ID first.</p>
-      </div>
-    );
-  }
+export default async function HistoryPage({ params }: LeaguePageProps) {
+  const { leagueId } = params;
 
   try {
     // Get league history chain

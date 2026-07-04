@@ -69,6 +69,17 @@ export default function Navigation() {
               );
             })}
             <Link
+              href="/portfolio"
+              className={cn(
+                'px-3 py-2 rounded-md text-sm font-medium transition-colors',
+                pathname.startsWith('/portfolio')
+                  ? 'bg-sleeper-accent text-sleeper-dark'
+                  : 'text-gray-300 hover:bg-white/[0.06] hover:text-white'
+              )}
+            >
+              My Leagues
+            </Link>
+            <Link
               href="/start"
               className="ml-2 px-3 py-2 rounded-md text-sm font-medium text-gray-500 hover:bg-white/[0.06] hover:text-gold-400 transition-colors"
               title="Switch league"
@@ -118,6 +129,17 @@ export default function Navigation() {
               </Link>
             );
           })}
+          <Link
+            href="/portfolio"
+            className={cn(
+              'block px-3 py-2 rounded-md text-base font-medium transition-colors',
+              pathname.startsWith('/portfolio')
+                ? 'bg-sleeper-accent text-sleeper-dark'
+                : 'text-gray-300 hover:bg-white/[0.06] hover:text-white'
+            )}
+          >
+            My Leagues
+          </Link>
           <Link
             href="/start"
             className="block px-3 py-2 rounded-md text-base font-medium text-gray-500 hover:bg-white/[0.06] hover:text-gold-400 transition-colors"

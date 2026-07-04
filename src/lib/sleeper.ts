@@ -92,6 +92,23 @@ export async function getAllPlayers(): Promise<SleeperPlayersMap> {
   return players;
 }
 
+// Sleeper user profile (accepts username or user id)
+export interface SleeperUserProfile {
+  user_id: string;
+  username: string;
+  display_name: string;
+  avatar: string | null;
+}
+
+export async function getUser(usernameOrId: string): Promise<SleeperUserProfile> {
+  return fetchSleeper<SleeperUserProfile>(`/user/${encodeURIComponent(usernameOrId)}`);
+}
+
+// All of a user's NFL leagues for a season
+export async function getUserLeagues(userId: string, season: string): Promise<SleeperLeague[]> {
+  return fetchSleeper<SleeperLeague[]>(`/user/${userId}/leagues/nfl/${season}`);
+}
+
 // Helper function to get user by ID
 export function getUserByOwnerId(users: SleeperUser[], ownerId: string): SleeperUser | null {
   return users.find(u => u.user_id === ownerId) || null;

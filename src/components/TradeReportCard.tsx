@@ -9,21 +9,24 @@ interface TradeReportCardProps {
   reportCards: TeamReportCard[];
 }
 
-// Grade color mapping
+// Grade color mapping. A-grades get the gold-foil treatment; the rest
+// step down through emerald, neutral, and warning tints.
 function getGradeColor(grade: string): string {
-  if (grade.startsWith('A')) return 'text-sleeper-green';
-  if (grade.startsWith('B')) return 'text-blue-400';
-  if (grade.startsWith('C')) return 'text-yellow-400';
+  if (grade.startsWith('A')) return 'text-sleeper-dark';
+  if (grade.startsWith('B')) return 'text-sleeper-green';
+  if (grade.startsWith('C')) return 'text-gray-300';
   if (grade === 'D') return 'text-orange-400';
   return 'text-sleeper-red';
 }
 
 function getGradeBgColor(grade: string): string {
-  if (grade.startsWith('A')) return 'bg-sleeper-green/20';
-  if (grade.startsWith('B')) return 'bg-blue-400/20';
-  if (grade.startsWith('C')) return 'bg-yellow-400/20';
-  if (grade === 'D') return 'bg-orange-400/20';
-  return 'bg-sleeper-red/20';
+  if (grade.startsWith('A')) {
+    return 'bg-gradient-to-b from-gold-300 via-gold-500 to-gold-600 shadow-gold-glow ring-1 ring-gold-300/60';
+  }
+  if (grade.startsWith('B')) return 'bg-sleeper-green/15 ring-1 ring-sleeper-green/20';
+  if (grade.startsWith('C')) return 'bg-white/[0.06] ring-1 ring-white/10';
+  if (grade === 'D') return 'bg-orange-400/15 ring-1 ring-orange-400/20';
+  return 'bg-sleeper-red/15 ring-1 ring-sleeper-red/25';
 }
 
 // Format value with + or - sign
@@ -268,7 +271,8 @@ export default function TradeReportCards({ reportCards }: TradeReportCardProps) 
   const hasMore = reportCards.length > 5;
 
   // Calculate league-wide stats
-  const totalTrades = reportCards.reduce((sum, c) => sum + c.totalTrades, 0) / 2; // Divide by 2 since each trade involves 2 teams
+  // Count unique trades: multi-team trades appear on several report cards
+  const totalTrades = new Set(reportCards.flatMap(c => c.trades.map(t => t.tradeId))).size;
   const avgGrade = reportCards.length > 0
     ? Math.round(reportCards.reduce((sum, c) => sum + c.gradeScore, 0) / reportCards.length)
     : 0;
@@ -279,7 +283,7 @@ export default function TradeReportCards({ reportCards }: TradeReportCardProps) 
         <div>
           <h2 className="text-xl font-semibold text-white">Trade Report Cards</h2>
           <p className="text-sm text-gray-400">
-            {Math.round(totalTrades)} total trades • League avg: {avgGrade} pts
+            {totalTrades} total trades • League avg: {avgGrade} pts
           </p>
           <p className="text-xs text-gray-500 mt-1">
             Values shown are averages of estimated trade-time value and current value

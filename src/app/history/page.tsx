@@ -8,7 +8,7 @@ import {
   getUserAvatarUrl,
   formatPoints,
 } from '@/lib/sleeper';
-import { getLeagueId, ordinalSuffix } from '@/lib/utils';
+import { getLeagueId, ordinalSuffix, getTeamName } from '@/lib/utils';
 import Image from 'next/image';
 import { SleeperLeague, SleeperUser, SleeperRoster } from '@/lib/types';
 
@@ -42,20 +42,15 @@ async function getSeasonData(leagueId: string): Promise<SeasonData | null> {
         const bracket = await getPlayoffBracket(leagueId, 'winners');
 
         if (bracket && bracket.length > 0) {
-          // Sleeper API returns abbreviated keys: r=round, m=matchup_id, w=winner, p=placement
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const bracketAny = bracket as any[];
-
           // Find the championship match - look for p=1 (1st place) or highest round
-          const championshipMatch = bracketAny.find(m => m.p === 1)
-            || bracketAny.reduce((max, m) => {
-              const round = m.r || m.round || 0;
-              const maxRound = max?.r || max?.round || 0;
+          const championshipMatch = bracket.find(m => m.p === 1)
+            || bracket.reduce((max, m) => {
+              const round = m.r ?? m.round ?? 0;
+              const maxRound = max?.r ?? max?.round ?? 0;
               return round > maxRound ? m : max;
-            }, bracketAny[0]);
+            }, bracket[0]);
 
-          // Get winner - could be 'w' (abbreviated) or 'winner_roster_id'
-          const winnerId = championshipMatch?.w || championshipMatch?.winner_roster_id;
+          const winnerId = championshipMatch?.w ?? championshipMatch?.winner_roster_id;
 
           if (winnerId) {
             const winnerRoster = rosters.find(r => r.roster_id === winnerId);
@@ -256,7 +251,7 @@ export default async function HistoryPage() {
                             <tr key={roster.roster_id} className="text-gray-300">
                               <td className="py-1 pr-4 text-gray-500">{idx + 1}</td>
                               <td className="py-1 pr-4">
-                                {user?.display_name || user?.username || `Team ${roster.roster_id}`}
+                                {getTeamName(user, roster.roster_id)}
                               </td>
                               <td className="py-1 pr-4 text-center text-sleeper-green">
                                 {roster.settings.wins || 0}
@@ -310,7 +305,7 @@ function calculateAllTimeRecords(seasonsData: SeasonData[]) {
       allRecords.push({
         season: season.league.season,
         rosterId: roster.roster_id,
-        teamName: user?.display_name || user?.username || `Team ${roster.roster_id}`,
+        teamName: getTeamName(user, roster.roster_id),
         points,
         wins: roster.settings.wins || 0,
         losses: roster.settings.losses || 0,

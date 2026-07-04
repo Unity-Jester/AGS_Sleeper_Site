@@ -13,6 +13,7 @@ import {
   AnalyzedPick,
 } from './types';
 import { DraftedPlayer } from './sleeper';
+import { getTeamName, pickRoundLabel } from './utils';
 import {
   HistoricalValueData,
   getHistoricalPlayerValue,
@@ -277,8 +278,7 @@ function getPickValue(
   );
 
   // Get generic pick value (fallback)
-  const roundLabel = pick.round === 1 ? '1st' : pick.round === 2 ? '2nd' : pick.round === 3 ? '3rd' : '4th';
-  const genericPickKey = `${pick.season} ${roundLabel}`;
+  const genericPickKey = `${pick.season} ${pickRoundLabel(pick.round)}`;
   const fallbackPickValue = pickValues[genericPickKey] || 0;
 
   if (wasUsed && draftedPlayer) {
@@ -627,7 +627,7 @@ function calculateTradePartners(
   partnerMap.forEach((value, partnerId) => {
     const roster = rosters.find(r => r.roster_id === partnerId);
     const user = roster ? users.find(u => u.user_id === roster.owner_id) : null;
-    const teamName = user?.metadata?.team_name || user?.display_name || user?.username || `Team ${partnerId}`;
+    const teamName = getTeamName(user, partnerId);
 
     partners.push({
       rosterId: partnerId,
@@ -657,7 +657,7 @@ export function generateTeamReportCard(
 ): TeamReportCard {
   const roster = rosters.find(r => r.roster_id === rosterId);
   const user = roster ? users.find(u => u.user_id === roster.owner_id) : null;
-  const teamName = user?.metadata?.team_name || user?.display_name || user?.username || `Team ${rosterId}`;
+  const teamName = getTeamName(user, rosterId);
 
   const pickOwnershipMap = prebuiltPickOwnershipMap ?? buildPickOwnershipMap(allTrades, draftMap);
 

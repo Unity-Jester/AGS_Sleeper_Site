@@ -3,7 +3,7 @@
 import { useState, useMemo, useCallback } from 'react';
 import { SleeperPlayersMap, SleeperRoster, SleeperUser, DraftPickSelection } from '@/lib/types';
 import { getPlayerAvatarUrl } from '@/lib/sleeper';
-import { getPositionTextColor } from '@/lib/utils';
+import { getPositionTextColor, getTeamName, pickRoundLabel } from '@/lib/utils';
 import { getDraftPickOptions, getPickKey, calculateTradeValue } from '@/lib/rankings';
 import Image from 'next/image';
 
@@ -67,7 +67,7 @@ export default function TradeAnalyzer({
   const teamOptions = useMemo(() => {
     return rosters.map(roster => {
       const user = users.find(u => u.user_id === roster.owner_id);
-      const teamName = user?.metadata?.team_name || user?.display_name || user?.username || `Team ${roster.roster_id}`;
+      const teamName = getTeamName(user, roster.roster_id);
       return {
         rosterId: roster.roster_id,
         teamName,
@@ -740,8 +740,7 @@ function PickSelector({ show, onToggle, onAdd, pickOptions, pickValues }: PickSe
   const [season, setSeason] = useState(pickOptions.seasons[0]);
   const [round, setRound] = useState(1);
 
-  const roundLabel = round === 1 ? '1st' : round === 2 ? '2nd' : round === 3 ? '3rd' : '4th';
-  const currentKey = `${season} ${roundLabel}`;
+  const currentKey = `${season} ${pickRoundLabel(round)}`;
   const currentValue = pickValues[currentKey] || 0;
 
   const handleAdd = () => {

@@ -247,13 +247,22 @@ export interface SleeperDraftPick {
   draft_id: string;
 }
 
+// The bracket endpoint returns abbreviated keys (r/m/w/l/p); the long
+// names are kept optional for older payload shapes.
 export interface PlayoffMatchup {
-  round: number;
-  matchup_id: number;
-  team_1_roster_id: number | null;
-  team_2_roster_id: number | null;
-  winner_roster_id: number | null;
-  loser_roster_id: number | null;
+  r?: number; // round
+  m?: number; // matchup id
+  w?: number | null; // winner roster id
+  l?: number | null; // loser roster id
+  p?: number; // placement this game decides (1 = championship)
+  t1?: number | null; // team 1 roster id
+  t2?: number | null; // team 2 roster id
+  round?: number;
+  matchup_id?: number;
+  team_1_roster_id?: number | null;
+  team_2_roster_id?: number | null;
+  winner_roster_id?: number | null;
+  loser_roster_id?: number | null;
   team_1_from?: {
     w?: number;
     l?: number;

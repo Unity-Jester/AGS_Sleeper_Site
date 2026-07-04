@@ -1,7 +1,63 @@
 // Utility functions
 
+import { SleeperUser } from './types';
+
 export function cn(...classes: (string | boolean | undefined | null)[]): string {
   return classes.filter(Boolean).join(' ');
+}
+
+// Canonical display name for a team: custom team name, then Sleeper
+// display name, then username, then a roster-id fallback.
+export function getTeamName(user: SleeperUser | null | undefined, rosterId: number): string {
+  return (
+    user?.metadata?.team_name ||
+    user?.display_name ||
+    user?.username ||
+    `Team ${rosterId}`
+  );
+}
+
+// Draft round label matching FantasyCalc's pick naming ("1st".."4th").
+// Rounds past 4 clamp to "4th": external value sources only price rounds
+// 1-4, and a late pick priced as a 4th beats being priced at zero.
+export function pickRoundLabel(round: number): string {
+  if (round === 1) return '1st';
+  if (round === 2) return '2nd';
+  if (round === 3) return '3rd';
+  return '4th';
+}
+
+// Parse a single CSV line handling quoted fields
+export function parseCSVLine(line: string): string[] {
+  const fields: string[] = [];
+  let current = '';
+  let inQuotes = false;
+
+  for (let i = 0; i < line.length; i++) {
+    const char = line[i];
+
+    if (char === '"') {
+      inQuotes = !inQuotes;
+    } else if (char === ',' && !inQuotes) {
+      fields.push(current);
+      current = '';
+    } else {
+      current += char;
+    }
+  }
+  fields.push(current);
+
+  return fields;
+}
+
+// Normalize a player name for cross-source matching: strip generational
+// suffixes, then everything that isn't a letter. Both sides of any lookup
+// must use this same function.
+export function normalizePlayerName(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/\s+(jr|sr|ii|iii|iv|v)\.?\s*$/i, '')
+    .replace(/[^a-z]/g, '');
 }
 
 export function formatDate(timestamp: number): string {

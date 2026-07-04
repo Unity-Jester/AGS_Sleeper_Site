@@ -1,5 +1,6 @@
 // Power Rankings from external sources
 import { FantasyCalcSettings, DraftPickSelection, TradeCalculation, TradeSide } from './types';
+import { parseCSVLine, normalizePlayerName, pickRoundLabel } from './utils';
 
 export interface TeamPowerRanking {
   rank: number;
@@ -76,8 +77,7 @@ function isPickName(name: string): boolean {
 
 // Generate a pick key that matches FantasyCalc format (e.g., "2026 1st")
 export function getPickKey(pick: DraftPickSelection): string {
-  const roundSuffix = pick.round === 1 ? '1st' : pick.round === 2 ? '2nd' : pick.round === 3 ? '3rd' : '4th';
-  return `${pick.season} ${roundSuffix}`;
+  return `${pick.season} ${pickRoundLabel(pick.round)}`;
 }
 
 // Get available draft pick options
@@ -178,40 +178,6 @@ export async function fetchDynastyProcessValues(): Promise<Map<string, number>> 
     console.error('Error fetching DynastyProcess values:', error);
     return new Map();
   }
-}
-
-// Parse a CSV line handling quoted fields
-function parseCSVLine(line: string): string[] {
-  const fields: string[] = [];
-  let current = '';
-  let inQuotes = false;
-
-  for (let i = 0; i < line.length; i++) {
-    const char = line[i];
-
-    if (char === '"') {
-      inQuotes = !inQuotes;
-    } else if (char === ',' && !inQuotes) {
-      fields.push(current);
-      current = '';
-    } else {
-      current += char;
-    }
-  }
-  fields.push(current);
-
-  return fields;
-}
-
-// Normalize player name for matching
-function normalizePlayerName(name: string): string {
-  return name
-    .toLowerCase()
-    .replace(/[^a-z]/g, '') // Remove non-letters
-    .replace(/iii$/g, '')   // Remove III suffix
-    .replace(/ii$/g, '')    // Remove II suffix
-    .replace(/jr$/g, '')    // Remove Jr suffix
-    .replace(/sr$/g, '');   // Remove Sr suffix
 }
 
 // Calculate team power rankings

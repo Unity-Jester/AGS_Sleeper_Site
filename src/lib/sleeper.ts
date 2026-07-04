@@ -12,6 +12,7 @@ import {
   TeamInfo,
   MatchupPair,
 } from './types';
+import { getTeamName } from './utils';
 
 const SLEEPER_API_BASE = 'https://api.sleeper.app/v1';
 
@@ -107,7 +108,7 @@ export function buildTeamInfo(
     ownerId: roster.owner_id,
     user,
     roster,
-    teamName: user?.metadata?.team_name || user?.display_name || user?.username || `Team ${roster.roster_id}`,
+    teamName: getTeamName(user, roster.roster_id),
   };
 }
 
@@ -142,7 +143,7 @@ export function pairMatchups(
           team1: {
             roster: roster1,
             user: user1,
-            teamName: user1?.display_name || user1?.username || `Team ${roster1.roster_id}`,
+            teamName: getTeamName(user1, roster1.roster_id),
             points: pair[0].points || 0,
             starters: pair[0].starters || [],
             startersPoints: pair[0].starters_points || [],
@@ -150,7 +151,7 @@ export function pairMatchups(
           team2: {
             roster: roster2,
             user: user2,
-            teamName: user2?.display_name || user2?.username || `Team ${roster2.roster_id}`,
+            teamName: getTeamName(user2, roster2.roster_id),
             points: pair[1].points || 0,
             starters: pair[1].starters || [],
             startersPoints: pair[1].starters_points || [],

@@ -1,6 +1,6 @@
 import { SleeperTransaction, SleeperRoster, SleeperUser, SleeperPlayersMap } from '@/lib/types';
 import { getUserByOwnerId, getPlayerAvatarUrl, getUserAvatarUrl } from '@/lib/sleeper';
-import { timeAgo, cn } from '@/lib/utils';
+import { timeAgo, cn, getTeamName as teamDisplayName } from '@/lib/utils';
 import Image from 'next/image';
 
 interface TransactionCardProps {
@@ -15,7 +15,7 @@ export default function TransactionCard({ transaction, rosters, users, players }
     const roster = rosters.find(r => r.roster_id === rosterId);
     if (!roster) return `Team ${rosterId}`;
     const user = getUserByOwnerId(users, roster.owner_id);
-    return user?.display_name || user?.username || `Team ${rosterId}`;
+    return teamDisplayName(user, rosterId);
   };
 
   const getTeamAvatar = (rosterId: number) => {

@@ -18,7 +18,7 @@ import {
   getCurrentPlayerValue,
   HistoricalValueData,
 } from '@/lib/historicalValues';
-import { getLeagueId, ordinalSuffix, getPositionTextColor } from '@/lib/utils';
+import { getLeagueId, ordinalSuffix, getPositionTextColor, getTeamName } from '@/lib/utils';
 import Image from 'next/image';
 import { SleeperDraft, SleeperDraftPick, SleeperUser, SleeperRoster, SleeperPlayersMap } from '@/lib/types';
 import CollapsibleSection from '@/components/CollapsibleSection';
@@ -184,7 +184,7 @@ async function getAllDraftData(currentLeagueId: string): Promise<SeasonDraftData
               managerStatsMap.set(pick.roster_id, {
                 rosterId: pick.roster_id,
                 ownerId: roster?.owner_id || '',
-                teamName: user?.metadata?.team_name || user?.display_name || user?.username || `Team ${pick.roster_id}`,
+                teamName: getTeamName(user, pick.roster_id),
                 avatar: user?.avatar || null,
                 picks: [],
                 totalPickValue: 0,
@@ -659,7 +659,7 @@ export default async function DraftPage() {
                   const seasonData = draftData.find(d => d.season === pick.season);
                   const roster = seasonData?.rosters.find(r => r.roster_id === pick.roster_id);
                   const user = roster && seasonData ? getUserByOwnerId(seasonData.users, roster.owner_id) : null;
-                  const teamName = user?.metadata?.team_name || user?.display_name || user?.username || `Team ${pick.roster_id}`;
+                  const teamName = getTeamName(user, pick.roster_id);
 
                   return (
                     <div key={`${pick.draft_id}-${pick.pick_no}`} className="px-4 py-3 flex items-center gap-4">
@@ -738,7 +738,7 @@ function DraftBoard({
   for (const [slot, rosterId] of Object.entries(draft.slot_to_roster_id || {})) {
     const roster = rosters.find(r => r.roster_id === rosterId);
     const user = roster ? getUserByOwnerId(users, roster.owner_id) : null;
-    const teamName = user?.metadata?.team_name || user?.display_name || user?.username || `Team ${rosterId}`;
+    const teamName = getTeamName(user, rosterId);
     slotToTeam.set(parseInt(slot), teamName);
   }
 

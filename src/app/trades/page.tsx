@@ -13,6 +13,7 @@ import { generateAllReportCards } from '@/lib/tradeAnalysis';
 import { fetchHistoricalValues, buildPlayerNameMapping } from '@/lib/historicalValues';
 import { FantasyCalcSettings, SleeperTransaction } from '@/lib/types';
 import TradeAnalyzer from '@/components/TradeAnalyzer';
+import ErrorState from '@/components/ErrorState';
 import TradeHistory from '@/components/TradeHistory';
 import TradeReportCards from '@/components/TradeReportCard';
 
@@ -117,6 +118,15 @@ export default async function TradesPage() {
         <div>
           <h1 className="text-2xl font-bold text-white">Trade Center</h1>
           <p className="text-gray-400 mt-1">{league.name} &middot; {league.season} Season</p>
+          {historicalData.dates.length > 0 ? (
+            <p className="text-xs text-gray-500 mt-1">
+              Historical values updated {historicalData.dates[0]}
+            </p>
+          ) : (
+            <p className="text-xs text-yellow-500/80 mt-1">
+              Historical value data unavailable &mdash; grades fall back to estimates
+            </p>
+          )}
         </div>
 
         {/* Trade Analyzer */}
@@ -141,10 +151,6 @@ export default async function TradesPage() {
     );
   } catch (error) {
     console.error('Error loading trades:', error);
-    return (
-      <div className="text-center py-12">
-        <p className="text-sleeper-red">Error loading trades</p>
-      </div>
-    );
+    return <ErrorState title="Error Loading Trades" />;
   }
 }

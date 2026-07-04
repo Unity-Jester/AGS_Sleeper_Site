@@ -11,6 +11,7 @@ import {
 } from '@/lib/sleeper';
 import { getLeagueId } from '@/lib/utils';
 import Matchup from '@/components/Matchup';
+import ErrorState from '@/components/ErrorState';
 import WeekSelector from './WeekSelector';
 
 export const revalidate = 60;
@@ -154,10 +155,6 @@ export default async function MatchupsPage({ searchParams }: MatchupsPageProps) 
     );
   } catch (error) {
     console.error('Error loading matchups:', error);
-    return (
-      <div className="text-center py-12">
-        <p className="text-sleeper-red">Error loading matchups</p>
-      </div>
-    );
+    return <ErrorState title="Error Loading Matchups" />;
   }
 }

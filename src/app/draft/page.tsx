@@ -22,6 +22,7 @@ import { getLeagueId, ordinalSuffix, getPositionTextColor, getTeamName } from '@
 import Image from 'next/image';
 import { SleeperDraft, SleeperDraftPick, SleeperUser, SleeperRoster, SleeperPlayersMap } from '@/lib/types';
 import CollapsibleSection from '@/components/CollapsibleSection';
+import ErrorState from '@/components/ErrorState';
 
 export const revalidate = 300; // Revalidate every 5 minutes
 
@@ -708,11 +709,7 @@ export default async function DraftPage() {
     );
   } catch (error) {
     console.error('Error loading draft data:', error);
-    return (
-      <div className="text-center py-12">
-        <p className="text-sleeper-red">Error loading draft data</p>
-      </div>
-    );
+    return <ErrorState title="Error Loading Draft Data" />;
   }
 }
 

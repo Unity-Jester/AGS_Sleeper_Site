@@ -11,6 +11,7 @@ import {
 } from '@/lib/sleeper';
 import { getLeagueId } from '@/lib/utils';
 import { calculateLuckIndex, calculateWeeklyAwards } from '@/lib/seasonStats';
+import ErrorState from '@/components/ErrorState';
 import Standings from '@/components/Standings';
 import Matchup from '@/components/Matchup';
 import TransactionCard from '@/components/TransactionCard';
@@ -152,13 +153,10 @@ export default async function DashboardPage() {
   } catch (error) {
     console.error('Error loading dashboard:', error);
     return (
-      <div className="text-center py-12">
-        <h1 className="text-2xl font-bold text-sleeper-red mb-4">Error Loading League</h1>
-        <p className="text-gray-400">
-          Could not load league data. Please check your League ID and try again.
-        </p>
-        <p className="text-sm text-gray-500 mt-2">League ID: {leagueId}</p>
-      </div>
+      <ErrorState
+        title="Error Loading League"
+        detail={`Could not load league data for league ${leagueId}. Please check your League ID.`}
+      />
     );
   }
 }

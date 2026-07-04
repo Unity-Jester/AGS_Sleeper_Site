@@ -10,6 +10,7 @@ import {
   getHeadToHeadRecords,
 } from '@/lib/sleeper';
 import H2HGrid from '@/components/H2HGrid';
+import ErrorState from '@/components/ErrorState';
 import { getLeagueId, ordinalSuffix, getTeamName } from '@/lib/utils';
 import Image from 'next/image';
 import { SleeperLeague, SleeperUser, SleeperRoster } from '@/lib/types';
@@ -293,11 +294,7 @@ export default async function HistoryPage() {
     );
   } catch (error) {
     console.error('Error loading history:', error);
-    return (
-      <div className="text-center py-12">
-        <p className="text-sleeper-red">Error loading league history</p>
-      </div>
-    );
+    return <ErrorState title="Error Loading League History" />;
   }
 }
 

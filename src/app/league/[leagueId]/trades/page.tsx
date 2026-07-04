@@ -5,16 +5,20 @@ import {
   getAllPlayers,
   getAllHistoricalTrades,
   getAllHistoricalDrafts,
+  buildClientPlayersMap,
 } from '@/lib/sleeper';
-import { getLeagueId } from '@/lib/utils';
 import { fetchFantasyCalcValues } from '@/lib/rankings';
 import { generateAllReportCards } from '@/lib/tradeAnalysis';
 import { fetchHistoricalValues, buildPlayerNameMapping } from '@/lib/historicalValues';
 import { FantasyCalcSettings, SleeperTransaction } from '@/lib/types';
 import TradeAnalyzer from '@/components/TradeAnalyzer';
+import ErrorState from '@/components/ErrorState';
 import TradeHistory from '@/components/TradeHistory';
 import TradeReportCards from '@/components/TradeReportCard';
 
+// Rendered on demand: build-time prerendering of this page broke Vercel
+// deploys. Underlying Sleeper/FantasyCalc fetches are cached via
+// next.revalidate, so per-request cost is recomputation, not network.
 export const dynamic = 'force-dynamic';
 
 // Derive fantasy calc settings from Sleeper league data
@@ -40,16 +44,12 @@ function deriveLeagueSettings(
   };
 }
 
-export default async function TradesPage() {
-  const leagueId = getLeagueId();
+interface LeaguePageProps {
+  params: { leagueId: string };
+}
 
-  if (!leagueId || leagueId === 'your_league_id_here') {
-    return (
-      <div className="text-center py-12">
-        <p className="text-gray-400">Please configure your League ID first.</p>
-      </div>
-    );
-  }
+export default async function TradesPage({ params }: LeaguePageProps) {
+  const { leagueId } = params;
 
   try {
     // Fetch all data in parallel
@@ -96,16 +96,37 @@ export default async function TradesPage() {
       playerMapping
     );
 
+    // Client components below receive a slimmed players map: full player
+    // data is ~5MB and would be serialized into the page payload.
+    const tradedPlayerIds = allTrades.flatMap(t => [
+      ...Object.keys(t.adds || {}),
+      ...Object.keys(t.drops || {}),
+    ]);
+    const rosteredPlayerIds = rosters.flatMap(r => r.players || []);
+    const clientPlayers = buildClientPlayersMap(players, [
+      ...tradedPlayerIds,
+      ...rosteredPlayerIds,
+    ]);
+
     return (
       <div className="space-y-8">
         <div>
           <h1 className="text-2xl font-bold text-white">Trade Center</h1>
           <p className="text-gray-400 mt-1">{league.name} &middot; {league.season} Season</p>
+          {historicalData.dates.length > 0 ? (
+            <p className="text-xs text-gray-500 mt-1">
+              Historical values updated {historicalData.dates[0]}
+            </p>
+          ) : (
+            <p className="text-xs text-yellow-500/80 mt-1">
+              Historical value data unavailable &mdash; grades fall back to estimates
+            </p>
+          )}
         </div>
 
         {/* Trade Analyzer */}
         <TradeAnalyzer
-          players={players}
+          players={clientPlayers}
           rosters={rosters}
           users={users}
           playerValues={playerValuesObj}
@@ -118,17 +139,13 @@ export default async function TradesPage() {
         {/* Trade History - All Seasons */}
         <TradeHistory
           seasonTrades={allSeasonTrades}
-          players={players}
+          players={clientPlayers}
           currentSeason={league.season}
         />
       </div>
     );
   } catch (error) {
     console.error('Error loading trades:', error);
-    return (
-      <div className="text-center py-12">
-        <p className="text-sleeper-red">Error loading trades</p>
-      </div>
-    );
+    return <ErrorState title="Error Loading Trades" />;
   }
 }

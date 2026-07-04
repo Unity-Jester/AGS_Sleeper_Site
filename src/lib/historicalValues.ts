@@ -1,6 +1,11 @@
 import { SleeperPlayersMap } from './types';
+import { parseCSVLine, normalizePlayerName, pickRoundLabel } from './utils';
 
-const HISTORICAL_VALUES_URL = 'https://docs.google.com/spreadsheets/d/1n5aqip8iFCpltO8deiS7q9m3u_dFvKTZpwzfZXVTpgs/export?format=csv&gid=991742784';
+// Source spreadsheet for historical player/pick values. Overridable so a
+// moved or re-shared sheet doesn't require a code change.
+const HISTORICAL_VALUES_URL =
+  process.env.HISTORICAL_VALUES_CSV_URL ||
+  'https://docs.google.com/spreadsheets/d/1n5aqip8iFCpltO8deiS7q9m3u_dFvKTZpwzfZXVTpgs/export?format=csv&gid=991742784';
 
 // Cache for historical values data
 let historicalDataCache: HistoricalValueData | null = null;
@@ -60,29 +65,6 @@ function parseCSV(csvText: string): HistoricalValueData {
   return { dates, pickColumns, playerColumns, values };
 }
 
-// Parse a single CSV line handling quoted fields
-function parseCSVLine(line: string): string[] {
-  const result: string[] = [];
-  let current = '';
-  let inQuotes = false;
-
-  for (let i = 0; i < line.length; i++) {
-    const char = line[i];
-
-    if (char === '"') {
-      inQuotes = !inQuotes;
-    } else if (char === ',' && !inQuotes) {
-      result.push(current);
-      current = '';
-    } else {
-      current += char;
-    }
-  }
-  result.push(current);
-
-  return result;
-}
-
 // Fetch and cache historical values
 export async function fetchHistoricalValues(): Promise<HistoricalValueData> {
   const now = Date.now();
@@ -117,20 +99,6 @@ export async function fetchHistoricalValues(): Promise<HistoricalValueData> {
   }
 }
 
-// Normalize a name for matching (lowercase, remove punctuation, etc.)
-function normalizeName(name: string): string {
-  return name
-    .toLowerCase()
-    .replace(/[.']/g, '')  // Remove dots and apostrophes
-    .replace(/\s+jr$/i, '') // Remove Jr suffix
-    .replace(/\s+sr$/i, '') // Remove Sr suffix
-    .replace(/\s+ii$/i, '') // Remove II suffix
-    .replace(/\s+iii$/i, '') // Remove III suffix
-    .replace(/\s+iv$/i, '')  // Remove IV suffix
-    .replace(/\s+/g, ' ')   // Normalize whitespace
-    .trim();
-}
-
 // Build a mapping from Sleeper player IDs to historical data column names
 export function buildPlayerNameMapping(
   players: SleeperPlayersMap,
@@ -141,39 +109,20 @@ export function buildPlayerNameMapping(
   // Create normalized lookup for historical columns
   const normalizedHistorical = new Map<string, string>();
   for (const col of historicalPlayerColumns) {
-    normalizedHistorical.set(normalizeName(col), col);
+    normalizedHistorical.set(normalizePlayerName(col), col);
   }
 
   // Match each Sleeper player to a historical column
   for (const [playerId, player] of Object.entries(players)) {
     if (!player.full_name) continue;
 
-    const normalizedName = normalizeName(player.full_name);
-
-    // Try exact match first
-    if (normalizedHistorical.has(normalizedName)) {
-      mapping.set(playerId, normalizedHistorical.get(normalizedName)!);
-      continue;
-    }
-
-    // Try without suffix (some names have Jr./Sr. differences)
-    const baseName = normalizedName.replace(/\s+(jr|sr|ii|iii|iv)$/i, '').trim();
-    if (normalizedHistorical.has(baseName)) {
-      mapping.set(playerId, normalizedHistorical.get(baseName)!);
-      continue;
-    }
-
-    // Try first initial + last name for common nickname issues
-    const nameParts = player.full_name.split(' ');
-    if (nameParts.length >= 2) {
-      const firstInitialLastName = `${nameParts[0][0]}. ${nameParts[nameParts.length - 1]}`;
-      const normalizedInitial = normalizeName(firstInitialLastName);
-      for (const [normalized, original] of normalizedHistorical) {
-        if (normalized.includes(normalizedInitial) || normalizedInitial.includes(normalized)) {
-          mapping.set(playerId, original);
-          break;
-        }
-      }
+    // normalizePlayerName already strips punctuation, whitespace, and
+    // generational suffixes, so a single exact lookup covers the
+    // Jr./Sr./apostrophe variations between sources.
+    const normalizedName = normalizePlayerName(player.full_name);
+    const match = normalizedHistorical.get(normalizedName);
+    if (match) {
+      mapping.set(playerId, match);
     }
   }
 
@@ -248,8 +197,7 @@ export function getHistoricalPickValue(
   historicalData: HistoricalValueData,
   tier: 'Early' | 'Mid' | 'Late' = 'Mid' // Default to mid since we don't know draft position
 ): number | null {
-  const roundLabel = round === 1 ? '1st' : round === 2 ? '2nd' : round === 3 ? '3rd' : '4th';
-  const columnName = `${season} ${tier} ${roundLabel}`;
+  const columnName = `${season} ${tier} ${pickRoundLabel(round)}`;
 
   const closestDate = findClosestDate(tradeDate, historicalData.dates);
   if (!closestDate) return null;
@@ -287,8 +235,7 @@ export function getCurrentPickValue(
 ): number | null {
   if (historicalData.dates.length === 0) return null;
 
-  const roundLabel = round === 1 ? '1st' : round === 2 ? '2nd' : round === 3 ? '3rd' : '4th';
-  const columnName = `${season} ${tier} ${roundLabel}`;
+  const columnName = `${season} ${tier} ${pickRoundLabel(round)}`;
 
   const dateValues = historicalData.values.get(historicalData.dates[0]);
   if (!dateValues) return null;

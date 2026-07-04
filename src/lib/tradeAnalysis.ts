@@ -13,6 +13,7 @@ import {
   AnalyzedPick,
 } from './types';
 import { DraftedPlayer } from './sleeper';
+import { getTeamName, pickRoundLabel } from './utils';
 import {
   HistoricalValueData,
   getHistoricalPlayerValue,
@@ -165,7 +166,7 @@ function createAssetValue(historical: number, current: number): TradeAssetValue 
 }
 
 // Build pick ownership chain to track what happened to picks after trades
-interface PickOwnershipInfo {
+export interface PickOwnershipInfo {
   finalOwnerId: number;
   wasUsedInDraft: boolean;
   draftedPlayer: DraftedPlayer | null;
@@ -181,8 +182,6 @@ function buildPickOwnershipMap(
   const currentPickOwners = new Map<string, number>();
 
   for (const trade of sortedTrades) {
-    if (trade.roster_ids.length > 2) continue;
-
     for (const pick of trade.draft_picks || []) {
       const pickKey = `${pick.season}_${pick.round}_${pick.roster_id}`;
       const tradeKey = `${pickKey}_${trade.transaction_id}`;
@@ -202,8 +201,6 @@ function buildPickOwnershipMap(
   }
 
   for (const trade of sortedTrades) {
-    if (trade.roster_ids.length > 2) continue;
-
     for (const pick of trade.draft_picks || []) {
       const pickKey = `${pick.season}_${pick.round}_${pick.roster_id}`;
       const tradeKey = `${pickKey}_${trade.transaction_id}`;
@@ -281,8 +278,7 @@ function getPickValue(
   );
 
   // Get generic pick value (fallback)
-  const roundLabel = pick.round === 1 ? '1st' : pick.round === 2 ? '2nd' : pick.round === 3 ? '3rd' : '4th';
-  const genericPickKey = `${pick.season} ${roundLabel}`;
+  const genericPickKey = `${pick.season} ${pickRoundLabel(pick.round)}`;
   const fallbackPickValue = pickValues[genericPickKey] || 0;
 
   if (wasUsed && draftedPlayer) {
@@ -351,16 +347,12 @@ export function analyzeTrade(
   historicalData: HistoricalValueData | null = null,
   playerMapping: Map<string, string> | null = null
 ): TradeAnalysis | null {
-  // Filter out 3+ team trades
-  if (trade.roster_ids.length > 2) {
-    return null;
-  }
-
   if (!trade.roster_ids.includes(rosterId)) {
     return null;
   }
 
-  const partnerId = trade.roster_ids.find(id => id !== rosterId);
+  const partnerIds = trade.roster_ids.filter(id => id !== rosterId);
+  const partnerId = partnerIds[0];
   if (partnerId === undefined) {
     return null;
   }
@@ -448,10 +440,18 @@ export function analyzeTrade(
   let givenHistorical = 0;
   let givenCurrent = 0;
 
-  // Players given
+  // Players given: drops records which roster a player left. Fall back to
+  // "destination is a partner" when drops is missing (only valid 2-team).
+  const wasGivenByRoster = (playerId: string, addRosterId: number): boolean => {
+    if (trade.drops) {
+      return trade.drops[playerId] === rosterId && addRosterId !== rosterId;
+    }
+    return addRosterId === partnerId;
+  };
+
   if (trade.adds) {
     for (const [playerId, addRosterId] of Object.entries(trade.adds)) {
-      if (addRosterId === partnerId) {
+      if (wasGivenByRoster(playerId, addRosterId)) {
         const player = players[playerId];
         const position = player?.position || 'Unknown';
         const ageAtTrade = getAgeAtTrade(player, trade.created);
@@ -491,11 +491,11 @@ export function analyzeTrade(
 
   // Picks given
   for (const pick of trade.draft_picks || []) {
-    if (pick.owner_id === partnerId && pick.previous_owner_id === rosterId) {
+    if (pick.previous_owner_id === rosterId && pick.owner_id !== rosterId) {
       const { value, becamePlayer, wasUsedByTeam } = getPickValue(
         pick,
         trade.transaction_id,
-        partnerId,
+        pick.owner_id,
         trade.created,
         pickValues,
         playerValues,
@@ -542,6 +542,7 @@ export function analyzeTrade(
     tradeId: trade.transaction_id,
     date: trade.created,
     partnerId,
+    partnerIds,
     received: {
       players: receivedPlayers,
       picks: receivedPicks,
@@ -611,17 +612,22 @@ function calculateTradePartners(
   const partnerMap = new Map<number, { count: number; netValue: number }>();
 
   for (const trade of trades) {
-    const current = partnerMap.get(trade.partnerId) || { count: 0, netValue: 0 };
-    current.count++;
-    current.netValue += trade.netValue.average;
-    partnerMap.set(trade.partnerId, current);
+    // Split net value evenly across partners so multi-team trades don't
+    // attribute the full swing to a single partner.
+    const partners = trade.partnerIds.length > 0 ? trade.partnerIds : [trade.partnerId];
+    for (const pid of partners) {
+      const current = partnerMap.get(pid) || { count: 0, netValue: 0 };
+      current.count++;
+      current.netValue += trade.netValue.average / partners.length;
+      partnerMap.set(pid, current);
+    }
   }
 
   const partners: TradePartner[] = [];
   partnerMap.forEach((value, partnerId) => {
     const roster = rosters.find(r => r.roster_id === partnerId);
     const user = roster ? users.find(u => u.user_id === roster.owner_id) : null;
-    const teamName = user?.metadata?.team_name || user?.display_name || user?.username || `Team ${partnerId}`;
+    const teamName = getTeamName(user, partnerId);
 
     partners.push({
       rosterId: partnerId,
@@ -646,13 +652,14 @@ export function generateTeamReportCard(
   pickValues: Record<string, number>,
   draftMap: Map<string, DraftedPlayer> | null = null,
   historicalData: HistoricalValueData | null = null,
-  playerMapping: Map<string, string> | null = null
+  playerMapping: Map<string, string> | null = null,
+  prebuiltPickOwnershipMap: Map<string, PickOwnershipInfo> | null = null
 ): TeamReportCard {
   const roster = rosters.find(r => r.roster_id === rosterId);
   const user = roster ? users.find(u => u.user_id === roster.owner_id) : null;
-  const teamName = user?.metadata?.team_name || user?.display_name || user?.username || `Team ${rosterId}`;
+  const teamName = getTeamName(user, rosterId);
 
-  const pickOwnershipMap = buildPickOwnershipMap(allTrades, draftMap);
+  const pickOwnershipMap = prebuiltPickOwnershipMap ?? buildPickOwnershipMap(allTrades, draftMap);
 
   const trades: TradeAnalysis[] = [];
   for (const trade of allTrades) {
@@ -723,6 +730,9 @@ export function generateAllReportCards(
 ): TeamReportCard[] {
   const reportCards: TeamReportCard[] = [];
 
+  // Built once here; rebuilding per roster is O(teams x trades) of wasted work
+  const pickOwnershipMap = buildPickOwnershipMap(allTrades, draftMap);
+
   for (const roster of rosters) {
     const reportCard = generateTeamReportCard(
       roster.roster_id,
@@ -734,7 +744,8 @@ export function generateAllReportCards(
       pickValues,
       draftMap,
       historicalData,
-      playerMapping
+      playerMapping,
+      pickOwnershipMap
     );
     reportCards.push(reportCard);
   }

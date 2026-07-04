@@ -7,8 +7,11 @@ import {
   getUserByOwnerId,
   getUserAvatarUrl,
   formatPoints,
+  getHeadToHeadRecords,
 } from '@/lib/sleeper';
-import { getLeagueId, ordinalSuffix } from '@/lib/utils';
+import H2HGrid from '@/components/H2HGrid';
+import ErrorState from '@/components/ErrorState';
+import { ordinalSuffix, getTeamName } from '@/lib/utils';
 import Image from 'next/image';
 import { SleeperLeague, SleeperUser, SleeperRoster } from '@/lib/types';
 
@@ -42,20 +45,15 @@ async function getSeasonData(leagueId: string): Promise<SeasonData | null> {
         const bracket = await getPlayoffBracket(leagueId, 'winners');
 
         if (bracket && bracket.length > 0) {
-          // Sleeper API returns abbreviated keys: r=round, m=matchup_id, w=winner, p=placement
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const bracketAny = bracket as any[];
-
           // Find the championship match - look for p=1 (1st place) or highest round
-          const championshipMatch = bracketAny.find(m => m.p === 1)
-            || bracketAny.reduce((max, m) => {
-              const round = m.r || m.round || 0;
-              const maxRound = max?.r || max?.round || 0;
+          const championshipMatch = bracket.find(m => m.p === 1)
+            || bracket.reduce((max, m) => {
+              const round = m.r ?? m.round ?? 0;
+              const maxRound = max?.r ?? max?.round ?? 0;
               return round > maxRound ? m : max;
-            }, bracketAny[0]);
+            }, bracket[0]);
 
-          // Get winner - could be 'w' (abbreviated) or 'winner_roster_id'
-          const winnerId = championshipMatch?.w || championshipMatch?.winner_roster_id;
+          const winnerId = championshipMatch?.w ?? championshipMatch?.winner_roster_id;
 
           if (winnerId) {
             const winnerRoster = rosters.find(r => r.roster_id === winnerId);
@@ -78,32 +76,39 @@ async function getSeasonData(leagueId: string): Promise<SeasonData | null> {
   }
 }
 
-export default async function HistoryPage() {
-  const leagueId = getLeagueId();
+interface LeaguePageProps {
+  params: { leagueId: string };
+}
 
-  if (!leagueId || leagueId === 'your_league_id_here') {
-    return (
-      <div className="text-center py-12">
-        <p className="text-gray-400">Please configure your League ID first.</p>
-      </div>
-    );
-  }
+export default async function HistoryPage({ params }: LeaguePageProps) {
+  const { leagueId } = params;
 
   try {
     // Get league history chain
     const leagueChain = await getLeagueHistory(leagueId);
 
-    // Fetch data for all seasons
-    const seasonsData: SeasonData[] = [];
-    for (const league of leagueChain) {
-      const data = await getSeasonData(league.league_id);
-      if (data) {
-        seasonsData.push(data);
-      }
-    }
+    // Fetch every season's data and the all-time H2H map concurrently
+    const [seasonsResults, h2hRecords] = await Promise.all([
+      Promise.all(leagueChain.map(league => getSeasonData(league.league_id))),
+      getHeadToHeadRecords(leagueId),
+    ]);
+    const seasonsData = seasonsResults.filter((d): d is SeasonData => d !== null);
 
     // Calculate all-time records
     const allTimeRecords = calculateAllTimeRecords(seasonsData);
+
+    // Unique owners across all seasons, named by their most recent season
+    const ownerMap = new Map<string, string>();
+    for (const season of seasonsData) {
+      for (const roster of season.rosters) {
+        if (roster.owner_id && !ownerMap.has(roster.owner_id)) {
+          const user = getUserByOwnerId(season.users, roster.owner_id);
+          ownerMap.set(roster.owner_id, getTeamName(user, roster.roster_id));
+        }
+      }
+    }
+    const owners = Array.from(ownerMap, ([id, name]) => ({ id, name }))
+      .sort((a, b) => a.name.localeCompare(b.name));
 
     return (
       <div className="space-y-8">
@@ -208,6 +213,9 @@ export default async function HistoryPage() {
           </div>
         </div>
 
+        {/* Head-to-Head Rivalry Grid */}
+        <H2HGrid owners={owners} h2hRecords={h2hRecords} />
+
         {/* Season-by-Season Archive */}
         <div className="bg-sleeper-darker rounded-lg overflow-hidden">
           <div className="px-4 py-3 border-b border-gray-800">
@@ -256,7 +264,7 @@ export default async function HistoryPage() {
                             <tr key={roster.roster_id} className="text-gray-300">
                               <td className="py-1 pr-4 text-gray-500">{idx + 1}</td>
                               <td className="py-1 pr-4">
-                                {user?.display_name || user?.username || `Team ${roster.roster_id}`}
+                                {getTeamName(user, roster.roster_id)}
                               </td>
                               <td className="py-1 pr-4 text-center text-sleeper-green">
                                 {roster.settings.wins || 0}
@@ -282,11 +290,7 @@ export default async function HistoryPage() {
     );
   } catch (error) {
     console.error('Error loading history:', error);
-    return (
-      <div className="text-center py-12">
-        <p className="text-sleeper-red">Error loading league history</p>
-      </div>
-    );
+    return <ErrorState title="Error Loading League History" />;
   }
 }
 
@@ -310,7 +314,7 @@ function calculateAllTimeRecords(seasonsData: SeasonData[]) {
       allRecords.push({
         season: season.league.season,
         rosterId: roster.roster_id,
-        teamName: user?.display_name || user?.username || `Team ${roster.roster_id}`,
+        teamName: getTeamName(user, roster.roster_id),
         points,
         wins: roster.settings.wins || 0,
         losses: roster.settings.losses || 0,

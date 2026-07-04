@@ -1,6 +1,7 @@
 import { SleeperRoster, SleeperUser } from '@/lib/types';
 import { getUserByOwnerId, formatPoints, getUserAvatarUrl } from '@/lib/sleeper';
 import Image from 'next/image';
+import { getTeamName } from '@/lib/utils';
 
 interface StandingsProps {
   rosters: SleeperRoster[];
@@ -71,7 +72,7 @@ export default function Standings({ rosters, users }: StandingsProps) {
           <tbody className="divide-y divide-gray-800">
             {sortedRosters.map((roster, index) => {
               const user = getUserByOwnerId(users, roster.owner_id);
-              const teamName = user?.display_name || user?.username || `Team ${roster.roster_id}`;
+              const teamName = getTeamName(user, roster.roster_id);
 
               const wins = roster.settings.wins || 0;
               const losses = roster.settings.losses || 0;

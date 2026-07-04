@@ -18,10 +18,11 @@ import {
   getCurrentPlayerValue,
   HistoricalValueData,
 } from '@/lib/historicalValues';
-import { getLeagueId, ordinalSuffix, getPositionTextColor } from '@/lib/utils';
+import { ordinalSuffix, getPositionTextColor, getTeamName } from '@/lib/utils';
 import Image from 'next/image';
 import { SleeperDraft, SleeperDraftPick, SleeperUser, SleeperRoster, SleeperPlayersMap } from '@/lib/types';
 import CollapsibleSection from '@/components/CollapsibleSection';
+import ErrorState from '@/components/ErrorState';
 
 export const revalidate = 300; // Revalidate every 5 minutes
 
@@ -184,7 +185,7 @@ async function getAllDraftData(currentLeagueId: string): Promise<SeasonDraftData
               managerStatsMap.set(pick.roster_id, {
                 rosterId: pick.roster_id,
                 ownerId: roster?.owner_id || '',
-                teamName: user?.metadata?.team_name || user?.display_name || user?.username || `Team ${pick.roster_id}`,
+                teamName: getTeamName(user, pick.roster_id),
                 avatar: user?.avatar || null,
                 picks: [],
                 totalPickValue: 0,
@@ -334,16 +335,12 @@ function getValueColor(diff: number): string {
   return 'text-sleeper-red';
 }
 
-export default async function DraftPage() {
-  const leagueId = getLeagueId();
+interface LeaguePageProps {
+  params: { leagueId: string };
+}
 
-  if (!leagueId || leagueId === 'your_league_id_here') {
-    return (
-      <div className="text-center py-12">
-        <p className="text-gray-400">Please configure your League ID first.</p>
-      </div>
-    );
-  }
+export default async function DraftPage({ params }: LeaguePageProps) {
+  const { leagueId } = params;
 
   try {
     const [league, draftData] = await Promise.all([
@@ -659,7 +656,7 @@ export default async function DraftPage() {
                   const seasonData = draftData.find(d => d.season === pick.season);
                   const roster = seasonData?.rosters.find(r => r.roster_id === pick.roster_id);
                   const user = roster && seasonData ? getUserByOwnerId(seasonData.users, roster.owner_id) : null;
-                  const teamName = user?.metadata?.team_name || user?.display_name || user?.username || `Team ${pick.roster_id}`;
+                  const teamName = getTeamName(user, pick.roster_id);
 
                   return (
                     <div key={`${pick.draft_id}-${pick.pick_no}`} className="px-4 py-3 flex items-center gap-4">
@@ -708,11 +705,7 @@ export default async function DraftPage() {
     );
   } catch (error) {
     console.error('Error loading draft data:', error);
-    return (
-      <div className="text-center py-12">
-        <p className="text-sleeper-red">Error loading draft data</p>
-      </div>
-    );
+    return <ErrorState title="Error Loading Draft Data" />;
   }
 }
 
@@ -738,7 +731,7 @@ function DraftBoard({
   for (const [slot, rosterId] of Object.entries(draft.slot_to_roster_id || {})) {
     const roster = rosters.find(r => r.roster_id === rosterId);
     const user = roster ? getUserByOwnerId(users, roster.owner_id) : null;
-    const teamName = user?.metadata?.team_name || user?.display_name || user?.username || `Team ${rosterId}`;
+    const teamName = getTeamName(user, rosterId);
     slotToTeam.set(parseInt(slot), teamName);
   }
 

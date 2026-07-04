@@ -392,6 +392,7 @@ export interface TradeAnalysis {
   tradeId: string;
   date: number;
   partnerId: number;
+  partnerIds: number[];
   received: TradeSideAnalysis;
   given: TradeSideAnalysis;
   netValue: TradeAssetValue;

@@ -70,3 +70,15 @@ describe('ordinalSuffix', () => {
     expect(ordinalSuffix(21)).toBe('21st');
   });
 });
+
+describe('truncateName', () => {
+  it('never splits surrogate pairs or flags', async () => {
+    const { truncateName } = await import('../utils');
+    const name = 'Bless em 🙏🇨🇱 dynasty';
+    const cut = truncateName(name, 11);
+    expect(cut).not.toContain('�');
+    // no lone surrogates
+    expect(() => encodeURIComponent(cut)).not.toThrow();
+    expect(truncateName('short', 10)).toBe('short');
+  });
+});

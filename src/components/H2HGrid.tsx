@@ -1,4 +1,5 @@
 import { HeadToHeadRecord, getH2HForOwners } from '@/lib/sleeper';
+import { truncateName } from '@/lib/utils';
 
 interface Owner {
   id: string;
@@ -53,7 +54,7 @@ export default function H2HGrid({ owners, h2hRecords }: H2HGridProps) {
                   className="p-2 text-xs text-gray-400 font-medium max-w-[90px] truncate"
                   title={owner.name}
                 >
-                  {owner.name.length > 10 ? `${owner.name.slice(0, 10)}…` : owner.name}
+                  {truncateName(owner.name, 10)}
                 </th>
               ))}
             </tr>
@@ -65,7 +66,7 @@ export default function H2HGrid({ owners, h2hRecords }: H2HGridProps) {
                   className="sticky left-0 bg-sleeper-darker p-2 text-xs text-gray-400 font-medium text-left max-w-[110px] truncate"
                   title={rowOwner.name}
                 >
-                  {rowOwner.name.length > 12 ? `${rowOwner.name.slice(0, 12)}…` : rowOwner.name}
+                  {truncateName(rowOwner.name, 12)}
                 </th>
                 {owners.map(colOwner => (
                   <td

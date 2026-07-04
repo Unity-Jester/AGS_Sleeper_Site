@@ -140,6 +140,15 @@ export function getLeagueId(): string {
   return process.env.NEXT_PUBLIC_LEAGUE_ID || '';
 }
 
+// Truncate on code-point boundaries so emoji and other astral-plane
+// characters are never split into lone surrogates (which render as U+FFFD
+// and, in SSR output, cause hydration mismatches).
+export function truncateName(name: string, max: number): string {
+  const chars = Array.from(name);
+  if (chars.length <= max) return name;
+  return chars.slice(0, max).join('') + '\u2026';
+}
+
 export function abbreviateNumber(num: number): string {
   if (num >= 1000000) {
     return (num / 1000000).toFixed(1) + 'M';

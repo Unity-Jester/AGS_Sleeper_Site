@@ -342,15 +342,22 @@ export async function getAllHistoricalDrafts(currentLeagueId: string): Promise<M
   return draftMap;
 }
 
-// Get previous league IDs (for history)
+// Get previous league IDs (for history). Ancestor leagues can be deleted
+// or inaccessible; the chain extends as far back as Sleeper still serves.
+// Only a failure on the requested league itself is an error.
 export async function getLeagueHistory(leagueId: string): Promise<SleeperLeague[]> {
   const history: SleeperLeague[] = [];
   let currentLeagueId: string | null = leagueId;
 
   while (currentLeagueId) {
-    const league = await getLeague(currentLeagueId);
-    history.push(league);
-    currentLeagueId = league.previous_league_id;
+    try {
+      const league = await getLeague(currentLeagueId);
+      history.push(league);
+      currentLeagueId = league.previous_league_id;
+    } catch (error) {
+      if (history.length === 0) throw error;
+      break;
+    }
   }
 
   return history;

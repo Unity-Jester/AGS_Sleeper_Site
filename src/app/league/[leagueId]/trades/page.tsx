@@ -10,6 +10,7 @@ import {
 import { fetchFantasyCalcValues } from '@/lib/rankings';
 import { generateAllReportCards } from '@/lib/tradeAnalysis';
 import { fetchHistoricalValues, buildPlayerNameMapping } from '@/lib/historicalValues';
+import { estimateScaleFactor } from '@/lib/vault';
 import { FantasyCalcSettings, SleeperTransaction } from '@/lib/types';
 import { buildTradeValueMap } from '@/lib/transactionValues';
 import TradeAnalyzer from '@/components/TradeAnalyzer';
@@ -85,6 +86,14 @@ export default async function TradesPage({ params }: LeaguePageProps) {
     const allTrades: SleeperTransaction[] = allSeasonTrades.flatMap(s => s.trades);
 
     // Generate report cards for all teams (with historical data for accurate values)
+    // Calibrate FantasyCalc fallbacks onto the sheet's value scale so
+    // untracked players don't undervalue their side of a trade
+    const fcScale = estimateScaleFactor(
+      historicalData.values.get(historicalData.dates[0]),
+      playerValues,
+      playerMapping
+    );
+
     const reportCards = generateAllReportCards(
       allTrades,
       rosters,
@@ -94,7 +103,8 @@ export default async function TradesPage({ params }: LeaguePageProps) {
       pickValuesObj,
       draftMap,
       historicalData,
-      playerMapping
+      playerMapping,
+      fcScale
     );
 
     // Reuse the per-trade analyses already computed for the report cards

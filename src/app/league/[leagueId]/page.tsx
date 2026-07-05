@@ -13,6 +13,7 @@ import {
 import { fetchFantasyCalcValues } from '@/lib/rankings';
 import { generateAllReportCards } from '@/lib/tradeAnalysis';
 import { fetchHistoricalValues, buildPlayerNameMapping } from '@/lib/historicalValues';
+import { estimateScaleFactor } from '@/lib/vault';
 import { buildTradeValueMap, buildTransactionValueChangeMap } from '@/lib/transactionValues';
 import { FantasyCalcSettings, SleeperTransaction } from '@/lib/types';
 import { calculateLuckIndex, calculateWeeklyAwards } from '@/lib/seasonStats';
@@ -104,6 +105,12 @@ export default async function DashboardPage({ params }: LeaguePageProps) {
     const pickValuesObj = Object.fromEntries(pickValues);
     const playerMapping = buildPlayerNameMapping(players, historicalData.playerColumns);
     const seasonTrades: SleeperTransaction[] = transactions.filter(t => t.type === 'trade');
+    // FantasyCalc fallbacks calibrated onto the sheet's scale (see trades page)
+    const fcScale = estimateScaleFactor(
+      historicalData.values.get(historicalData.dates[0]),
+      playerValues,
+      playerMapping
+    );
     const reportCards = generateAllReportCards(
       seasonTrades,
       rosters,
@@ -113,7 +120,8 @@ export default async function DashboardPage({ params }: LeaguePageProps) {
       pickValuesObj,
       draftMap,
       historicalData,
-      playerMapping
+      playerMapping,
+      fcScale
     );
     const tradeValues = buildTradeValueMap(reportCards);
     const transactionValueChanges = buildTransactionValueChangeMap(recentTransactions, playerValuesObj);

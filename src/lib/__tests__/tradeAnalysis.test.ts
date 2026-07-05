@@ -200,3 +200,25 @@ describe('generateAllReportCards', () => {
     expect(byRoster.get(4)!.grade).toBe('C');
   });
 });
+
+describe('cross-source scale calibration', () => {
+  it('rescales FantasyCalc fallbacks when sheet data is present', async () => {
+    const { analyzeTrade: analyze } = await import('../tradeAnalysis');
+    const { HistoricalValueData } = { HistoricalValueData: null };
+    // Sheet tracks only p1 at 3720 (2x the FC 1860); p2 is untracked (FC 1000)
+    const sheet = {
+      dates: ['2026-07-01'],
+      pickColumns: [],
+      playerColumns: ['Star Receiver'],
+      values: new Map([['2026-07-01', new Map([['Star Receiver', 3720]])]]),
+    } as never;
+    const mapping = new Map([['p1', 'Star Receiver']]);
+    const trade = makeTrade({ adds: { p1: 1, p2: 2 } });
+
+    // Without scaling, p2's side reads 1000 vs 3720 (a blowout);
+    // with fcScale 2 it reads 2000 - the correct sheet-scale comparison
+    const analysis = analyze(trade, 2, PLAYERS, { p1: 1860, p2: 1000 }, {}, emptyPickMap, null, sheet, mapping, 2);
+    expect(analysis!.received.totalValue.current).toBe(2000);
+    expect(analysis!.given.totalValue.current).toBe(3720);
+  });
+});

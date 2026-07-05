@@ -267,8 +267,12 @@ function getPickValue(
   pickOwnershipMap: Map<string, PickOwnershipInfo>,
   draftMap: Map<string, DraftedPlayer> | null,
   historicalData: HistoricalValueData | null,
-  playerMapping: Map<string, string> | null
+  playerMapping: Map<string, string> | null,
+  fcScale: number = 1
 ): { value: TradeAssetValue; becamePlayer: DraftedPlayer | null; wasUsedByTeam: boolean } {
+  // FantasyCalc fallbacks are rescaled onto the sheet's value scale
+  // whenever sheet data is in play, or mixed-source sums skew the trade
+  const scale = historicalData ? fcScale : 1;
   const { wasUsed, draftedPlayer } = didTeamUsePick(
     rosterId,
     pick,
@@ -279,7 +283,7 @@ function getPickValue(
 
   // Get generic pick value (fallback)
   const genericPickKey = `${pick.season} ${pickRoundLabel(pick.round)}`;
-  const fallbackPickValue = pickValues[genericPickKey] || 0;
+  const fallbackPickValue = (pickValues[genericPickKey] || 0) * scale;
 
   if (wasUsed && draftedPlayer) {
     // Team used the pick - use player's value
@@ -307,7 +311,7 @@ function getPickValue(
       : null;
 
     const finalHistorical = histPickValue ?? fallbackPickValue;
-    const finalCurrent = currentValue ?? playerValues[draftedPlayer.playerId] ?? 0;
+    const finalCurrent = currentValue ?? (playerValues[draftedPlayer.playerId] ?? 0) * scale;
 
     return {
       value: createAssetValue(finalHistorical, finalCurrent),
@@ -345,8 +349,10 @@ export function analyzeTrade(
   pickOwnershipMap: Map<string, PickOwnershipInfo>,
   draftMap: Map<string, DraftedPlayer> | null = null,
   historicalData: HistoricalValueData | null = null,
-  playerMapping: Map<string, string> | null = null
+  playerMapping: Map<string, string> | null = null,
+  fcScale: number = 1
 ): TradeAnalysis | null {
+  const fallbackScale = historicalData ? fcScale : 1;
   if (!trade.roster_ids.includes(rosterId)) {
     return null;
   }
@@ -380,7 +386,7 @@ export function analyzeTrade(
         }
 
         // Fall back to estimation/current values if no historical data
-        const fallbackCurrent = playerValues[playerId] || 0;
+        const fallbackCurrent = (playerValues[playerId] || 0) * fallbackScale;
         const finalCurrent = currentValue ?? fallbackCurrent;
         const finalHistorical = historicalValue ?? estimateHistoricalValue(
           finalCurrent,
@@ -418,7 +424,8 @@ export function analyzeTrade(
         pickOwnershipMap,
         draftMap,
         historicalData,
-        playerMapping
+        playerMapping,
+        fcScale
       );
 
       receivedPicks.push({
@@ -464,7 +471,7 @@ export function analyzeTrade(
           currentValue = getCurrentPlayerValue(playerId, historicalData, playerMapping);
         }
 
-        const fallbackCurrent = playerValues[playerId] || 0;
+        const fallbackCurrent = (playerValues[playerId] || 0) * fallbackScale;
         const finalCurrent = currentValue ?? fallbackCurrent;
         const finalHistorical = historicalValue ?? estimateHistoricalValue(
           finalCurrent,
@@ -502,7 +509,8 @@ export function analyzeTrade(
         pickOwnershipMap,
         draftMap,
         historicalData,
-        playerMapping
+        playerMapping,
+        fcScale
       );
 
       givenPicks.push({
@@ -653,7 +661,8 @@ export function generateTeamReportCard(
   draftMap: Map<string, DraftedPlayer> | null = null,
   historicalData: HistoricalValueData | null = null,
   playerMapping: Map<string, string> | null = null,
-  prebuiltPickOwnershipMap: Map<string, PickOwnershipInfo> | null = null
+  prebuiltPickOwnershipMap: Map<string, PickOwnershipInfo> | null = null,
+  fcScale: number = 1
 ): TeamReportCard {
   const roster = rosters.find(r => r.roster_id === rosterId);
   const user = roster ? users.find(u => u.user_id === roster.owner_id) : null;
@@ -672,7 +681,8 @@ export function generateTeamReportCard(
       pickOwnershipMap,
       draftMap,
       historicalData,
-      playerMapping
+      playerMapping,
+      fcScale
     );
     if (analysis) {
       trades.push(analysis);
@@ -726,7 +736,8 @@ export function generateAllReportCards(
   pickValues: Record<string, number>,
   draftMap: Map<string, DraftedPlayer> | null = null,
   historicalData: HistoricalValueData | null = null,
-  playerMapping: Map<string, string> | null = null
+  playerMapping: Map<string, string> | null = null,
+  fcScale: number = 1
 ): TeamReportCard[] {
   const reportCards: TeamReportCard[] = [];
 
@@ -745,7 +756,8 @@ export function generateAllReportCards(
       draftMap,
       historicalData,
       playerMapping,
-      pickOwnershipMap
+      pickOwnershipMap,
+      fcScale
     );
     reportCards.push(reportCard);
   }

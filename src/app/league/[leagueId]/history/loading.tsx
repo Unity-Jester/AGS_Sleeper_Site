@@ -22,7 +22,7 @@ export default function HistoryLoading() {
       </div>
 
       {/* Records skeleton */}
-      <div className="grid md:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         {[1, 2].map((i) => (
           <div key={i} className="panel p-4 space-y-3">
             <div className="h-6 w-44 bg-gray-700 rounded animate-pulse" />

@@ -52,11 +52,56 @@ function TradeAgingChart({ trade, names }: { trade: VaultTrade; names: Map<numbe
   const sides = trade.sides.filter(s => s.points.length > 1);
   if (sides.length < 2) return null;
   const W = 340;
-  const H = 130;
-  const { x, y } = scale(sides.map(s => s.points), W, H, 10);
+  const H = 150;
+  const PAD = { top: 12, right: 46, bottom: 18, left: 8 };
+
+  const maxVal = Math.max(...sides.flatMap(s => s.points.map(p => p.value)), 1);
+  const x = (i: number, len: number) =>
+    PAD.left + (i / Math.max(len - 1, 1)) * (W - PAD.left - PAD.right);
+  const y = (v: number) => H - PAD.bottom - (v / maxVal) * (H - PAD.top - PAD.bottom);
+
+  // End-value labels, nudged apart when lines finish close together
+  const ends = sides.map((side, i) => ({
+    i,
+    side,
+    value: side.points[side.points.length - 1].value,
+    labelY: y(side.points[side.points.length - 1].value),
+  }));
+  ends.sort((a, b) => a.labelY - b.labelY);
+  for (let k = 1; k < ends.length; k++) {
+    if (ends[k].labelY - ends[k - 1].labelY < 12) {
+      ends[k].labelY = ends[k - 1].labelY + 12;
+    }
+  }
+  const labelYByIndex = new Map(ends.map(e => [e.i, e.labelY]));
 
   return (
     <svg viewBox={`0 0 ${W} ${H}`} className="w-full" role="img" aria-label="Trade value over time">
+      {/* Value scale: baseline at 0 and a gridline at the chart max */}
+      <line x1={PAD.left} y1={H - PAD.bottom} x2={W - PAD.right} y2={H - PAD.bottom} stroke="#403d37" />
+      <line
+        x1={PAD.left}
+        y1={y(maxVal)}
+        x2={W - PAD.right}
+        y2={y(maxVal)}
+        stroke="rgba(255,255,255,0.07)"
+        strokeDasharray="3 4"
+      />
+      <text x={PAD.left} y={y(maxVal) - 3} fill="#6e6a60" fontSize="9">
+        {abbreviateNumber(maxVal)}
+      </text>
+      <text x={PAD.left} y={H - PAD.bottom - 3} fill="#6e6a60" fontSize="9">
+        0
+      </text>
+
+      {/* Time axis: trade day on the left, today on the right */}
+      <text x={PAD.left} y={H - 5} fill="#6e6a60" fontSize="9">
+        {formatDate(trade.date)}
+      </text>
+      <text x={W - PAD.right} y={H - 5} fill="#6e6a60" fontSize="9" textAnchor="end">
+        Today
+      </text>
+
       {sides.map((side, i) => {
         const color = SIDE_COLORS[i % SIDE_COLORS.length];
         const d = side.points
@@ -66,14 +111,18 @@ function TradeAgingChart({ trade, names }: { trade: VaultTrade; names: Map<numbe
         return (
           <g key={side.rosterId}>
             <path d={d} fill="none" stroke={color} strokeWidth="2" strokeLinejoin="round" />
-            <circle
-              cx={x(side.points.length - 1, side.points.length)}
-              cy={y(last.value)}
-              r="3.5"
-              fill={color}
-            >
+            <circle cx={x(side.points.length - 1, side.points.length)} cy={y(last.value)} r="3" fill={color}>
               <title>{`${names.get(side.rosterId) || side.rosterId}: ${last.value.toLocaleString()} today`}</title>
             </circle>
+            <text
+              x={W - PAD.right + 6}
+              y={(labelYByIndex.get(i) || y(last.value)) + 3}
+              fill={color}
+              fontSize="10"
+              fontWeight="600"
+            >
+              {abbreviateNumber(last.value)}
+            </text>
           </g>
         );
       })}
@@ -261,7 +310,7 @@ export default async function VaultPage({ params }: LeaguePageProps) {
           </p>
           <div className="space-y-1 mb-2">
             {trade.sides.map((s, i) => (
-              <p key={s.rosterId} className="text-xs text-gray-400 truncate flex items-baseline gap-1.5" title={s.assetLabels.join(', ')}>
+              <p key={s.rosterId} className="text-xs text-gray-400 flex items-baseline gap-1.5 min-w-0" title={s.assetLabels.join(', ')}>
                 <span
                   className="w-1.5 h-1.5 rounded-full inline-block shrink-0 self-center"
                   style={{ backgroundColor: SIDE_COLORS[i % SIDE_COLORS.length] }}
@@ -270,7 +319,7 @@ export default async function VaultPage({ params }: LeaguePageProps) {
                   {s.todayIsEstimated ? '\u2248' : ''}
                   {abbreviateNumber(s.todayValue)}
                 </span>
-                <span className="truncate">{s.assetLabels.join(', ') || 'nothing'}</span>
+                <span className="truncate min-w-0 flex-1">{s.assetLabels.join(', ') || 'nothing'}</span>
               </p>
             ))}
           </div>
@@ -295,7 +344,7 @@ export default async function VaultPage({ params }: LeaguePageProps) {
 
         {/* Superlatives */}
         {(heist || photoFinish || peakFranchise) && (
-          <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {superlativeCard('The Heist', '\u{1F3C6}', heist, t =>
               `${names.get(t.leaderRosterId!) || 'The winner'} has gained ${abbreviateNumber(Math.abs(Math.round(t.swing)))} of separation since trade day.`
             )}
@@ -330,7 +379,7 @@ export default async function VaultPage({ params }: LeaguePageProps) {
               untracked players, matching how the Teams page ranks rosters.
             </p>
           </div>
-          <div className="grid sm:grid-cols-2 lg:grid-cols-3 divide-y sm:divide-y-0 divide-white/[0.05]">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 divide-y sm:divide-y-0 divide-white/[0.05]">
             {franchises.map(f => (
               <div key={f.rosterId} className="p-4">
                 <div className="flex items-baseline justify-between gap-2 mb-1">
@@ -358,7 +407,7 @@ export default async function VaultPage({ params }: LeaguePageProps) {
           <p className="text-sm text-gray-400 mb-4">
             {chartable.length} of {vaultTrades.length} trades old enough to chart &mdash; watch them age
           </p>
-          <div className="grid md:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {chartable.map(trade => {
               const badge = coverageBadge(trade);
               const leaderName = trade.leaderRosterId !== null ? names.get(trade.leaderRosterId) : null;
@@ -390,7 +439,7 @@ export default async function VaultPage({ params }: LeaguePageProps) {
                           {abbreviateNumber(side.todayValue)}
                         </span>
                         <span
-                          className="text-gray-400 text-xs truncate"
+                          className="text-gray-400 text-xs truncate min-w-0 flex-1"
                           title={side.assetLabels.join(', ')}
                         >
                           {side.assetLabels.join(', ') || 'nothing'}

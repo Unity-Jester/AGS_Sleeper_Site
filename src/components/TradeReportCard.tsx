@@ -172,7 +172,7 @@ function ReportCard({ card, rank }: { card: TeamReportCard; rank: number }) {
       {/* Expanded Details */}
       {expanded && card.totalTrades > 0 && (
         <div className="px-4 pb-4 border-t border-gray-800">
-          <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-4 mt-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mt-4">
             {/* Win Rate */}
             <div className="bg-gray-800/50 rounded-lg p-3">
               <p className="text-xs text-gray-500 mb-1">Win Rate</p>

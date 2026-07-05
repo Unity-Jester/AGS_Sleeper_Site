@@ -197,7 +197,7 @@ export default async function PortfolioUserPage({ params }: PortfolioPageProps) 
         </div>
 
         {/* League cards */}
-        <div className="grid md:grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {portfolio.map(s => {
             const meta = VERDICT_META[s.myTeam.verdict];
             return (

@@ -146,7 +146,7 @@ export default async function PowerRankings({ rosters, users, players }: PowerRa
     <div className="space-y-4">
       <h2 className="text-xl font-semibold text-white">Power Rankings</h2>
 
-      <div className="grid md:grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <RankingColumn
           title="FantasyCalc"
           rankings={fcRankings}

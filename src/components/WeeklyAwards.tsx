@@ -81,7 +81,7 @@ export default function WeeklyAwards({ awards, rosters, users }: WeeklyAwardsPro
   return (
     <div>
       <h2 className="text-xl font-semibold text-white mb-4">Week {awards.week} Awards</h2>
-      <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
         {cards.map(card => (
           <div key={card.title} className="panel panel-hover p-4">
             <p className="text-xs text-gray-500 mb-2">

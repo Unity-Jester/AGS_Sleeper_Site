@@ -10,7 +10,7 @@ export default function TradesLoading() {
       {/* Trade Analyzer skeleton */}
       <div className="panel p-6">
         <div className="h-6 w-40 bg-gray-700 rounded animate-pulse mb-4" />
-        <div className="grid md:grid-cols-2 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           <div className="space-y-3">
             <div className="h-10 bg-gray-800 rounded animate-pulse" />
             <div className="h-10 bg-gray-800 rounded animate-pulse" />

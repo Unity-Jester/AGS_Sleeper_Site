@@ -415,7 +415,7 @@ export default async function DraftPage({ params }: LeaguePageProps) {
                   </div>
 
                   {/* Best and Worst Picks Across All Drafts */}
-                  <div className="grid md:grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     {/* Best Pick */}
                     {manager.bestPick && (
                       <div className="bg-gray-800/30 rounded-lg p-3">
@@ -541,7 +541,7 @@ export default async function DraftPage({ params }: LeaguePageProps) {
                 </div>
 
                 {/* Best and Worst Picks */}
-                <div className="grid md:grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   {/* Best Pick */}
                   {manager.bestPick && (
                     <div className="bg-gray-800/30 rounded-lg p-3">

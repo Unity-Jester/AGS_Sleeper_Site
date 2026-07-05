@@ -20,7 +20,7 @@ export default function DashboardLoading() {
       </div>
 
       {/* Matchups skeleton */}
-      <div className="grid md:grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {[1, 2, 3, 4].map((i) => (
           <div key={i} className="panel p-4 space-y-3">
             <div className="h-5 w-3/4 bg-gray-700 rounded animate-pulse" />

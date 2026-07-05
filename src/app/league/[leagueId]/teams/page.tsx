@@ -236,7 +236,7 @@ export default async function TeamsPage({ params }: LeaguePageProps) {
                   </div>
                 </div>
 
-                <div className="grid md:grid-cols-2 gap-4 mt-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
                   {/* Starters vs depth */}
                   <div>
                     <div className="flex justify-between text-xs text-gray-500 mb-1">

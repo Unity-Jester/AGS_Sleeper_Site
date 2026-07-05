@@ -166,7 +166,7 @@ export default async function DashboardPage({ params }: LeaguePageProps) {
               <p className="text-gray-400">Matchups will be available once the season starts</p>
             </div>
           ) : (
-            <div className="grid md:grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {matchupPairs.length > 0 ? (
                 matchupPairs.map((matchup) => (
                   <Matchup key={matchup.matchupId} matchup={matchup} players={players} />
@@ -182,7 +182,7 @@ export default async function DashboardPage({ params }: LeaguePageProps) {
         <div>
           <h2 className="text-xl font-semibold text-white mb-4">Recent Activity</h2>
           {recentTransactions.length > 0 ? (
-            <div className="grid md:grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {recentTransactions.map((transaction) => (
                 <TransactionCard
                   key={transaction.transaction_id}

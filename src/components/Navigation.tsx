@@ -52,7 +52,7 @@ export default function Navigation() {
           </div>
 
           {/* Desktop nav */}
-          <div className="hidden md:flex items-center gap-1">
+          <div className="hidden lg:flex items-center gap-1">
             {links.map((item) => {
               const isActive = pathname === item.href;
               return (
@@ -94,7 +94,7 @@ export default function Navigation() {
           <button
             type="button"
             onClick={() => setMenuOpen(open => !open)}
-            className="md:hidden p-2 rounded-md text-gray-300 hover:bg-white/[0.06] hover:text-white transition-colors"
+            className="lg:hidden p-2 rounded-md text-gray-300 hover:bg-white/[0.06] hover:text-white transition-colors"
             aria-expanded={menuOpen}
             aria-label={menuOpen ? 'Close menu' : 'Open menu'}
           >
@@ -113,7 +113,7 @@ export default function Navigation() {
 
       {/* Mobile menu panel */}
       {menuOpen && (
-        <div className="md:hidden border-t border-white/[0.06] bg-sleeper-dark/95 backdrop-blur-xl px-4 py-3 space-y-1">
+        <div className="lg:hidden border-t border-white/[0.06] bg-sleeper-dark/95 backdrop-blur-xl px-4 py-3 space-y-1">
           {links.map((item) => {
             const isActive = pathname === item.href;
             return (

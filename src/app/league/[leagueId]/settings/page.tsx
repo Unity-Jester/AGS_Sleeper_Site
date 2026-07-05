@@ -25,7 +25,7 @@ export default async function SettingsPage({ params }: LeaguePageProps) {
           <p className="text-gray-400 mt-1">{league.name}</p>
         </div>
 
-        <div className="grid md:grid-cols-2 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           {/* General Settings */}
           <div className="panel p-6">
             <h2 className="text-lg font-semibold text-white mb-4">General</h2>

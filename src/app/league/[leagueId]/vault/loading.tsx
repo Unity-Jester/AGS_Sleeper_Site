@@ -6,7 +6,7 @@ export default function VaultLoading() {
         <div className="h-8 w-72 bg-gray-700 rounded animate-pulse" />
         <div className="h-5 w-96 max-w-full bg-gray-800 rounded animate-pulse mt-2" />
       </div>
-      <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {[1, 2, 3].map((i) => (
           <div key={i} className="panel p-4 space-y-3">
             <div className="h-4 w-24 bg-gray-800 rounded animate-pulse" />
@@ -16,7 +16,7 @@ export default function VaultLoading() {
       </div>
       <div className="panel p-4">
         <div className="h-6 w-44 bg-gray-700 rounded animate-pulse mb-4" />
-        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {[1, 2, 3, 4, 5, 6].map((i) => (
             <div key={i} className="h-24 bg-gray-800/60 rounded animate-pulse" />
           ))}

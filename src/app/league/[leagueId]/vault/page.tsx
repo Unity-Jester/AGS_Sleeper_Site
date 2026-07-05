@@ -55,17 +55,27 @@ function TradeAgingChart({ trade, names }: { trade: VaultTrade; names: Map<numbe
   const H = 150;
   const PAD = { top: 12, right: 46, bottom: 18, left: 8 };
 
-  const maxVal = Math.max(...sides.flatMap(s => s.points.map(p => p.value)), 1);
+  const maxVal = Math.max(
+    ...sides.flatMap(s => s.points.map(p => p.value)),
+    ...sides.map(s => s.todayValue),
+    1
+  );
+  // When any side ends on an estimate, reserve the tail of the chart for a
+  // dashed hop from the last tracked point to the estimated today-value,
+  // so the line lands exactly on the number the chip shows.
+  const anyEstimated = sides.some(s => s.todayIsEstimated);
+  const plotRight = W - PAD.right;
+  const solidRight = anyEstimated ? PAD.left + (plotRight - PAD.left) * 0.86 : plotRight;
   const x = (i: number, len: number) =>
-    PAD.left + (i / Math.max(len - 1, 1)) * (W - PAD.left - PAD.right);
+    PAD.left + (i / Math.max(len - 1, 1)) * (solidRight - PAD.left);
   const y = (v: number) => H - PAD.bottom - (v / maxVal) * (H - PAD.top - PAD.bottom);
 
   // End-value labels, nudged apart when lines finish close together
   const ends = sides.map((side, i) => ({
     i,
     side,
-    value: side.points[side.points.length - 1].value,
-    labelY: y(side.points[side.points.length - 1].value),
+    value: side.todayValue,
+    labelY: y(side.todayValue),
   }));
   ends.sort((a, b) => a.labelY - b.labelY);
   for (let k = 1; k < ends.length; k++) {
@@ -108,20 +118,34 @@ function TradeAgingChart({ trade, names }: { trade: VaultTrade; names: Map<numbe
           .map((p, j) => `${j === 0 ? 'M' : 'L'}${x(j, side.points.length).toFixed(1)},${y(p.value).toFixed(1)}`)
           .join(' ');
         const last = side.points[side.points.length - 1];
+        const lastX = x(side.points.length - 1, side.points.length);
         return (
           <g key={side.rosterId}>
             <path d={d} fill="none" stroke={color} strokeWidth="2" strokeLinejoin="round" />
-            <circle cx={x(side.points.length - 1, side.points.length)} cy={y(last.value)} r="3" fill={color}>
-              <title>{`${names.get(side.rosterId) || side.rosterId}: ${last.value.toLocaleString()} today`}</title>
+            {anyEstimated && (
+              <line
+                x1={lastX}
+                y1={y(last.value)}
+                x2={plotRight}
+                y2={y(side.todayValue)}
+                stroke={color}
+                strokeWidth="2"
+                strokeDasharray="3 4"
+                strokeOpacity="0.8"
+              />
+            )}
+            <circle cx={anyEstimated ? plotRight : lastX} cy={y(side.todayValue)} r="3" fill={color}>
+              <title>{`${names.get(side.rosterId) || side.rosterId}: ${side.todayValue.toLocaleString()}${side.todayIsEstimated ? ' (incl. estimates)' : ''} today`}</title>
             </circle>
             <text
               x={W - PAD.right + 6}
-              y={(labelYByIndex.get(i) || y(last.value)) + 3}
+              y={(labelYByIndex.get(i) || y(side.todayValue)) + 3}
               fill={color}
               fontSize="10"
               fontWeight="600"
             >
-              {abbreviateNumber(last.value)}
+              {side.todayIsEstimated ? '\u2248' : ''}
+              {abbreviateNumber(side.todayValue)}
             </text>
           </g>
         );

@@ -254,18 +254,18 @@ export function buildVaultTrades(
       };
     });
 
-    // Gap dynamics between the two most valuable sides at the end
+    // Gap dynamics between the two most valuable sides, measured at the
+    // same endpoint the UI displays (todayValue, which includes estimates
+    // for untracked assets) so chart, chips, and summary text agree.
     const ranked = [...sides]
       .filter(s => s.points.length > 0)
-      .sort(
-        (a, b) => b.points[b.points.length - 1].value - a.points[a.points.length - 1].value
-      );
+      .sort((a, b) => b.todayValue - a.todayValue);
     let gapStart = 0;
     let gapNow = 0;
     let leaderRosterId: number | null = null;
     if (ranked.length >= 2) {
       const [lead, trail] = ranked;
-      gapNow = lead.points[lead.points.length - 1].value - trail.points[trail.points.length - 1].value;
+      gapNow = lead.todayValue - trail.todayValue;
       gapStart = lead.points[0].value - trail.points[0].value;
       leaderRosterId = lead.rosterId;
     }

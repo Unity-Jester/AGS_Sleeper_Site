@@ -252,6 +252,11 @@ describe('today-value estimates', () => {
     expect(side2.todayValue).toBe(4000); // 2000 x scale 2
     expect(side2.todayIsEstimated).toBe(true);
 
+    // Gap dynamics measure at the displayed endpoint (todayValue), so the
+    // summary text matches the chart's dashed landing point
+    expect(vt.leaderRosterId).toBe(1);
+    expect(vt.gapNow).toBe(9000 - 4000);
+
     // Scale factor: insufficient overlap falls back to default
     expect(scaleFn(new Map(), new Map(), new Map(), 1.8)).toBe(1.8);
   });

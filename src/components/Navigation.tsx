@@ -20,6 +20,7 @@ const navItems = [
 export default function Navigation() {
   const pathname = usePathname();
   const [menuOpen, setMenuOpen] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   // Close the mobile menu on navigation
   useEffect(() => {
@@ -33,6 +34,36 @@ export default function Navigation() {
   const links = base
     ? navItems.map(item => ({ href: `${base}${item.path}`, label: item.label }))
     : [];
+
+  // Share the league dashboard via the native share sheet when available,
+  // otherwise copy the link and confirm briefly.
+  const shareLeague = async () => {
+    if (!base) return;
+    const url = `${window.location.origin}${base}`;
+    try {
+      if (navigator.share) {
+        await navigator.share({ title: 'Dynasty League Hub', url });
+        return;
+      }
+      try {
+        await navigator.clipboard.writeText(url);
+      } catch {
+        // Clipboard API denied (e.g. non-secure context): legacy fallback
+        const ta = document.createElement('textarea');
+        ta.value = url;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+      }
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // user dismissed the share sheet
+    }
+  };
 
   return (
     <nav className="sticky top-0 z-40 bg-sleeper-dark/80 backdrop-blur-xl border-b border-white/[0.06]">
@@ -89,6 +120,34 @@ export default function Navigation() {
               {base ? 'Switch League' : 'Find a League'}
             </Link>
           </div>
+
+          {/* Share current league */}
+          {base && (
+            <button
+              type="button"
+              onClick={shareLeague}
+              className={`p-2 rounded-md transition-colors ${
+                copied ? 'text-gold-400' : 'text-gray-300 hover:bg-white/[0.06] hover:text-gold-400'
+              }`}
+              aria-label={copied ? 'Link copied' : 'Share league'}
+              title={copied ? 'Link copied!' : 'Share this league'}
+            >
+              {copied ? (
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                </svg>
+              ) : (
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M4 12v7a1 1 0 001 1h14a1 1 0 001-1v-7M16 6l-4-4-4 4M12 2v13"
+                  />
+                </svg>
+              )}
+            </button>
+          )}
 
           {/* Mobile hamburger */}
           <button

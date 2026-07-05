@@ -148,7 +148,7 @@ function ReportCard({ card, rank }: { card: TeamReportCard; rank: number }) {
           <p className={`text-lg font-semibold ${card.totalValueGained >= 0 ? 'text-sleeper-green' : 'text-sleeper-red'}`}>
             {formatValue(card.totalValueGained)}
           </p>
-          <p className="text-xs text-gray-500">avg net value</p>
+          <p className="text-xs text-gray-500">total net value</p>
         </div>
 
         {/* Grade */}

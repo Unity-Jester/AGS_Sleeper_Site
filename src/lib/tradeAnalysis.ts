@@ -87,8 +87,10 @@ function applyGradeCurve(reportCards: TeamReportCard[]): void {
     return;
   }
 
-  // Sort by raw score (highest first)
-  tradingTeams.sort((a, b) => b.gradeScore - a.gradeScore);
+  // Rank by total net value gained - the number the cards display.
+  // (gradeScore clamps average net value into 0-100, which pins heavy
+  // winners/losers to the ends and makes their relative order arbitrary.)
+  tradingTeams.sort((a, b) => b.totalValueGained - a.totalValueGained);
 
   // Assign grades based on percentile rank
   for (let i = 0; i < tradingTeams.length; i++) {
@@ -765,7 +767,7 @@ export function generateAllReportCards(
   // Apply curve grading based on relative performance
   applyGradeCurve(reportCards);
 
-  // Sort by grade score (highest first)
-  reportCards.sort((a, b) => b.gradeScore - a.gradeScore);
+  // Sort by the displayed metric so rank order matches the numbers shown
+  reportCards.sort((a, b) => b.totalValueGained - a.totalValueGained);
   return reportCards;
 }

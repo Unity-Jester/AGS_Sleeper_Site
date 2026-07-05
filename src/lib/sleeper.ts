@@ -305,16 +305,27 @@ export async function getAllHistoricalDrafts(currentLeagueId: string): Promise<M
     )
   ).flat();
 
+  // The league drafts list omits slot_to_roster_id; the draft detail
+  // endpoint includes it, and we need it to attribute traded picks.
   const draftsWithPicks = await Promise.all(
-    allDrafts.map(async draft => ({
-      draft,
-      picks: await getDraftPicks(draft.draft_id).catch(() => [] as SleeperDraftPick[]),
-    }))
+    allDrafts.map(async listed => {
+      const [draft, picks] = await Promise.all([
+        getDraft(listed.draft_id).catch(() => listed),
+        getDraftPicks(listed.draft_id).catch(() => [] as SleeperDraftPick[]),
+      ]);
+      return { draft, picks };
+    })
   );
 
   for (const { draft, picks } of draftsWithPicks) {
     for (const pick of picks) {
-      const key = `${draft.season}_${pick.round}_${pick.roster_id}`;
+      // Trade records reference a pick by its ORIGINAL slot owner, but in
+      // draft results roster_id is whoever actually made the pick (the
+      // acquirer, when the pick was traded). Resolve the original owner
+      // through the draft's slot map so traded picks match up.
+      const originalOwner =
+        draft.slot_to_roster_id?.[String(pick.draft_slot)] ?? pick.roster_id;
+      const key = `${draft.season}_${pick.round}_${originalOwner}`;
       draftMap.set(key, {
         season: draft.season,
         round: pick.round,

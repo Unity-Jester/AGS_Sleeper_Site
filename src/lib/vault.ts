@@ -1,4 +1,4 @@
-import { SleeperTransaction } from './types';
+import { SleeperTransaction, SleeperPlayersMap } from './types';
 import { HistoricalValueData } from './historicalValues';
 import { DraftedPlayer } from './sleeper';
 import { pickRoundLabel } from './utils';
@@ -20,6 +20,7 @@ export interface TradeSideSeries {
   points: SeriesPoint[];
   trackedAssets: number;
   totalAssets: number;
+  assetLabels: string[]; // human-readable haul, e.g. "2026 1st \u2192 Rookie Gem"
 }
 
 export interface VaultTrade {
@@ -119,6 +120,24 @@ function sideAssets(
   return assets;
 }
 
+function assetLabel(
+  asset: Asset,
+  players: SleeperPlayersMap,
+  draftMap: Map<string, DraftedPlayer> | null
+): string {
+  if (asset.kind === 'player') {
+    return players[asset.playerId]?.full_name || asset.playerId;
+  }
+  const base = `${asset.season} ${pickRoundLabel(asset.round)}`;
+  if (asset.becamePlayerId) {
+    const drafted =
+      players[asset.becamePlayerId]?.full_name ||
+      [...(draftMap?.values() || [])].find(d => d.playerId === asset.becamePlayerId)?.playerName;
+    if (drafted) return `${base} \u2192 ${drafted}`;
+  }
+  return base;
+}
+
 // Build the aging series for every trade: one line per side, sampled
 // along the sheet's date axis from trade day to today.
 export function buildVaultTrades(
@@ -126,6 +145,7 @@ export function buildVaultTrades(
   draftMap: Map<string, DraftedPlayer> | null,
   historicalData: HistoricalValueData,
   playerMapping: Map<string, string>,
+  players: SleeperPlayersMap = {},
   maxPoints: number = 60
 ): VaultTrade[] {
   const result: VaultTrade[] = [];
@@ -154,7 +174,13 @@ export function buildVaultTrades(
         );
         if (anyValue) tracked++;
       }
-      return { rosterId, points, trackedAssets: tracked, totalAssets: assets.length };
+      return {
+        rosterId,
+        points,
+        trackedAssets: tracked,
+        totalAssets: assets.length,
+        assetLabels: assets.map(a => assetLabel(a, players, draftMap)),
+      };
     });
 
     // Gap dynamics between the two most valuable sides at the end

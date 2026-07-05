@@ -156,7 +156,7 @@ export default async function VaultPage({ params }: LeaguePageProps) {
     }
 
     // --- Trade aging series ---
-    const vaultTrades = buildVaultTrades(allTrades, draftMap, historicalData, playerMapping);
+    const vaultTrades = buildVaultTrades(allTrades, draftMap, historicalData, playerMapping, players);
     const chartable = vaultTrades.filter(isChartable);
     const { heist, photoFinish } = findSuperlatives(vaultTrades);
 
@@ -222,9 +222,12 @@ export default async function VaultPage({ params }: LeaguePageProps) {
             <span className="mr-1">{emoji}</span>
             {title}
           </p>
-          <p className="text-sm text-white mb-2">
+          <p className="text-sm text-white mb-1">
             {trade.sides.map(s => names.get(s.rosterId) || `Team ${s.rosterId}`).join(' vs ')}
             <span className="text-gray-500 ml-2 text-xs">{formatDate(trade.date)}</span>
+          </p>
+          <p className="text-xs text-gray-400 mb-2 truncate" title={trade.sides.map(s => s.assetLabels.join(', ')).join('  /  ')}>
+            {trade.sides.map(s => s.assetLabels.join(', ') || 'nothing').join(' \u2194 ')}
           </p>
           <TradeAgingChart trade={trade} names={names} />
           <p className="text-xs text-gray-400 mt-2">{line(trade)}</p>
@@ -316,20 +319,26 @@ export default async function VaultPage({ params }: LeaguePageProps) {
                       </span>
                     )}
                   </div>
-                  <div className="flex flex-wrap gap-x-4 gap-y-1 mb-2 text-sm">
+                  <div className="space-y-1.5 mb-3">
                     {trade.sides.map((side, i) => (
-                      <span key={side.rosterId} className="flex items-center gap-1.5">
+                      <div key={side.rosterId} className="flex items-baseline gap-1.5 text-sm min-w-0">
                         <span
-                          className="w-2 h-2 rounded-full inline-block"
+                          className="w-2 h-2 rounded-full inline-block shrink-0 self-center"
                           style={{ backgroundColor: SIDE_COLORS[i % SIDE_COLORS.length] }}
                         />
-                        <span className="text-white">
-                          {truncateName(names.get(side.rosterId) || `Team ${side.rosterId}`, 16)}
+                        <span className="text-white shrink-0">
+                          {truncateName(names.get(side.rosterId) || `Team ${side.rosterId}`, 14)}
                         </span>
-                        <span className="text-gray-500 tabular-nums text-xs">
+                        <span className="text-gray-500 tabular-nums text-xs shrink-0">
                           {abbreviateNumber(side.points[side.points.length - 1]?.value || 0)}
                         </span>
-                      </span>
+                        <span
+                          className="text-gray-400 text-xs truncate"
+                          title={side.assetLabels.join(', ')}
+                        >
+                          {side.assetLabels.join(', ') || 'nothing'}
+                        </span>
+                      </div>
                     ))}
                   </div>
                   <TradeAgingChart trade={trade} names={names} />

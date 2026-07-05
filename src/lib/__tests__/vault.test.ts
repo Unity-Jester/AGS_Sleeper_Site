@@ -206,3 +206,24 @@ describe('findSuperlatives', () => {
     expect(sup.photoFinish?.tradeId).toBe('even');
   });
 });
+
+describe('asset labels', () => {
+  it('labels player and pick assets, including who a pick became', async () => {
+    const { buildVaultTrades: build } = await import('../vault');
+    const players = {
+      star: { player_id: 'star', full_name: 'Star Player' },
+      gem: { player_id: 'gem', full_name: 'Rookie Gem' },
+    } as never;
+    const pick: TradePick = { season: '2025', round: 1, roster_id: 2, previous_owner_id: 2, owner_id: 1 };
+    const draftMap = new Map<string, DraftedPlayer>([
+      ['2025_1_2', { season: '2025', round: 1, pick: 3, rosterId: 2, playerId: 'gem', playerName: 'Rookie Gem' }],
+    ]);
+    const trade = makeTrade({ adds: { star: 2 }, draft_picks: [pick] });
+    const [vt] = build([trade], draftMap, makeSheet(), mapping, players);
+
+    const side1 = vt.sides.find(s => s.rosterId === 1)!;
+    const side2 = vt.sides.find(s => s.rosterId === 2)!;
+    expect(side1.assetLabels).toEqual(['2025 1st → Rookie Gem']);
+    expect(side2.assetLabels).toEqual(['Star Player']);
+  });
+});

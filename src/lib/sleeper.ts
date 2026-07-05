@@ -295,13 +295,23 @@ export interface DraftedPlayer {
 
 // Get all draft picks from all historical seasons
 export async function getAllHistoricalDrafts(currentLeagueId: string): Promise<Map<string, DraftedPlayer>> {
-  // Map key format: "season_round_rosterId" -> DraftedPlayer
-  const draftMap = new Map<string, DraftedPlayer>();
   const leagueChain = await getLeagueHistory(currentLeagueId);
+  return buildDraftMap(leagueChain.map(l => l.league_id));
+}
+
+// Draft map for a single season's league - much cheaper than walking the
+// whole chain when only current-season trades need pick attribution.
+export async function getSeasonDraftMap(leagueId: string): Promise<Map<string, DraftedPlayer>> {
+  return buildDraftMap([leagueId]);
+}
+
+async function buildDraftMap(leagueIds: string[]): Promise<Map<string, DraftedPlayer>> {
+  // Map key format: "season_round_originalOwnerRosterId" -> DraftedPlayer
+  const draftMap = new Map<string, DraftedPlayer>();
 
   const allDrafts = (
     await Promise.all(
-      leagueChain.map(league => getLeagueDrafts(league.league_id).catch(() => [] as SleeperDraft[]))
+      leagueIds.map(id => getLeagueDrafts(id).catch(() => [] as SleeperDraft[]))
     )
   ).flat();
 

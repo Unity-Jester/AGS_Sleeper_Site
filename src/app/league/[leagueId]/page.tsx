@@ -7,7 +7,7 @@ import {
   getNFLState,
   getAllPlayers,
   getSeasonWeeklyMatchups,
-  getAllHistoricalDrafts,
+  getSeasonDraftMap,
   pairMatchups,
 } from '@/lib/sleeper';
 import { fetchFantasyCalcValues } from '@/lib/rankings';
@@ -82,7 +82,7 @@ export default async function DashboardPage({ params }: LeaguePageProps) {
       isPreseason
         ? Promise.resolve([] as Awaited<ReturnType<typeof getSeasonWeeklyMatchups>>)
         : getSeasonWeeklyMatchups(leagueId, regularSeasonWeeks),
-      getAllHistoricalDrafts(leagueId),
+      getSeasonDraftMap(leagueId),
       fetchHistoricalValues(),
     ]);
 

@@ -38,16 +38,6 @@ const SIDE_COLORS = ['#d4b26a', '#8e8a7e', '#c084fc'];
 // Server-rendered charts
 // ---------------------------------------------------------------------------
 
-function scale(points: SeriesPoint[][], w: number, h: number, pad: number) {
-  const all = points.flat();
-  const min = Math.min(...all.map(p => p.value), 0);
-  const max = Math.max(...all.map(p => p.value), 1);
-  const n = Math.max(...points.map(s => s.length), 2);
-  const x = (i: number, len: number) => pad + (i / Math.max(len - 1, 1)) * (w - pad * 2);
-  const y = (v: number) => h - pad - ((v - min) / (max - min || 1)) * (h - pad * 2);
-  return { x, y, n };
-}
-
 function TradeAgingChart({ trade, names }: { trade: VaultTrade; names: Map<number, string> }) {
   const sides = trade.sides.filter(s => s.points.length > 1);
   if (sides.length < 2) return null;
@@ -154,15 +144,34 @@ function TradeAgingChart({ trade, names }: { trade: VaultTrade; names: Map<numbe
   );
 }
 
-function FranchiseSparkline({ points }: { points: SeriesPoint[] }) {
+function FranchiseSparkline({
+  points,
+  current,
+  peakAtEnd,
+}: {
+  points: SeriesPoint[];
+  current: number;
+  peakAtEnd: boolean;
+}) {
   if (points.length < 2) return null;
   const W = 300;
   const H = 72;
-  const { x, y } = scale([points], W, H, 6);
+  const PAD = 6;
+
+  const maxVal = Math.max(...points.map(p => p.value), current, 1);
+  const last = points[points.length - 1];
+  // Reserve a tail for the dashed hop to today's (estimate-inclusive)
+  // value so the line lands on the number the card shows.
+  const hasTail = Math.abs(current - last.value) > 1;
+  const plotRight = W - PAD;
+  const solidRight = hasTail ? PAD + (plotRight - PAD) * 0.88 : plotRight;
+  const x = (i: number) => PAD + (i / Math.max(points.length - 1, 1)) * (solidRight - PAD);
+  const y = (v: number) => H - PAD - (v / maxVal) * (H - PAD * 2);
+
   const line = points
-    .map((p, i) => `${i === 0 ? 'M' : 'L'}${x(i, points.length).toFixed(1)},${y(p.value).toFixed(1)}`)
+    .map((p, i) => `${i === 0 ? 'M' : 'L'}${x(i).toFixed(1)},${y(p.value).toFixed(1)}`)
     .join(' ');
-  const area = `${line} L${x(points.length - 1, points.length).toFixed(1)},${H - 6} L${x(0, points.length).toFixed(1)},${H - 6} Z`;
+  const area = `${line} L${x(points.length - 1).toFixed(1)},${H - PAD} L${x(0).toFixed(1)},${H - PAD} Z`;
 
   let peakIdx = 0;
   points.forEach((p, i) => {
@@ -173,9 +182,28 @@ function FranchiseSparkline({ points }: { points: SeriesPoint[] }) {
     <svg viewBox={`0 0 ${W} ${H}`} className="w-full" role="img" aria-label="Franchise value over time">
       <path d={area} fill="rgba(212,178,106,0.10)" />
       <path d={line} fill="none" stroke="#d4b26a" strokeWidth="1.75" strokeLinejoin="round" />
-      <circle cx={x(peakIdx, points.length)} cy={y(points[peakIdx].value)} r="3" fill="#eddcae">
-        <title>{`Peak: ${points[peakIdx].value.toLocaleString()} on ${points[peakIdx].date}`}</title>
-      </circle>
+      {hasTail && (
+        <line
+          x1={x(points.length - 1)}
+          y1={y(last.value)}
+          x2={plotRight}
+          y2={y(current)}
+          stroke="#d4b26a"
+          strokeWidth="1.75"
+          strokeDasharray="3 4"
+          strokeOpacity="0.8"
+        />
+      )}
+      {hasTail && <circle cx={plotRight} cy={y(current)} r="2.5" fill="#d4b26a" />}
+      {peakAtEnd ? (
+        <circle cx={plotRight} cy={y(current)} r="3" fill="#eddcae">
+          <title>{`Peak: ${current.toLocaleString()} - today`}</title>
+        </circle>
+      ) : (
+        <circle cx={x(peakIdx)} cy={y(points[peakIdx].value)} r="3" fill="#eddcae">
+          <title>{`Peak: ${points[peakIdx].value.toLocaleString()} on ${points[peakIdx].date}`}</title>
+        </circle>
+      )}
     </svg>
   );
 }
@@ -303,13 +331,19 @@ export default async function VaultPage({ params }: LeaguePageProps) {
           }
         }
 
+        const current = Math.round(trackedNow + estimate);
+        const currentIsEstimated = estimate > 0;
+        // If today's (estimate-inclusive) value tops the tracked history,
+        // the peak IS now - never show a "peak" below the current value.
+        const peakIsCurrent = current > peak.value;
         return {
           rosterId: roster.roster_id,
           name: names.get(roster.roster_id) || `Team ${roster.roster_id}`,
           series,
-          peak,
-          current: Math.round(trackedNow + estimate),
-          currentIsEstimated: estimate > 0,
+          peak: peakIsCurrent ? { date: 'today', value: current } : peak,
+          peakIsCurrent,
+          current,
+          currentIsEstimated,
         };
       })
       .sort((a, b) => b.current - a.current);
@@ -382,11 +416,18 @@ export default async function VaultPage({ params }: LeaguePageProps) {
                   Peak Franchise
                 </p>
                 <p className="text-sm text-white mb-2">{peakFranchise.name}</p>
-                <FranchiseSparkline points={peakFranchise.series} />
+                <FranchiseSparkline
+                  points={peakFranchise.series}
+                  current={peakFranchise.current}
+                  peakAtEnd={peakFranchise.peakIsCurrent}
+                />
                 <p className="text-xs text-gray-400 mt-2">
                   Highest roster value in league history:{' '}
-                  <span className="text-gold-400">{peakFranchise.peak.value.toLocaleString()}</span> on{' '}
-                  {peakFranchise.peak.date}.
+                  <span className="text-gold-400">
+                    {peakFranchise.peakIsCurrent && peakFranchise.currentIsEstimated ? '\u2248' : ''}
+                    {peakFranchise.peak.value.toLocaleString()}
+                  </span>
+                  {peakFranchise.peakIsCurrent ? ' \u2014 right now.' : ` on ${peakFranchise.peak.date}.`}
                 </p>
               </div>
             )}
@@ -416,9 +457,10 @@ export default async function VaultPage({ params }: LeaguePageProps) {
                     {abbreviateNumber(f.current)}
                   </p>
                 </div>
-                <FranchiseSparkline points={f.series} />
+                <FranchiseSparkline points={f.series} current={f.current} peakAtEnd={f.peakIsCurrent} />
                 <p className="text-[11px] text-gray-500 mt-1">
-                  Peak {abbreviateNumber(f.peak.value)} &middot; {f.peak.date}
+                  Peak {f.peakIsCurrent && f.currentIsEstimated ? '\u2248' : ''}
+                  {abbreviateNumber(f.peak.value)} &middot; {f.peakIsCurrent ? 'today' : f.peak.date}
                 </p>
               </div>
             ))}

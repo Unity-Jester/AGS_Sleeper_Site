@@ -13,6 +13,7 @@ import {
   MatchupPair,
 } from './types';
 import { getTeamName } from './utils';
+import type { TradedPickRecord } from './tradeCalculator';
 
 const SLEEPER_API_BASE = 'https://api.sleeper.app/v1';
 
@@ -50,6 +51,12 @@ export async function getLeagueUsers(leagueId: string): Promise<SleeperUser[]> {
 
 export async function getLeagueRosters(leagueId: string): Promise<SleeperRoster[]> {
   return fetchSleeper<SleeperRoster[]>(`/league/${leagueId}/rosters`);
+}
+
+// Future picks that have changed hands (roster_id = original owner,
+// owner_id = current owner)
+export async function getTradedPicks(leagueId: string): Promise<TradedPickRecord[]> {
+  return fetchSleeper<TradedPickRecord[]>(`/league/${leagueId}/traded_picks`);
 }
 
 export async function getLeagueMatchups(leagueId: string, week: number): Promise<SleeperMatchup[]> {

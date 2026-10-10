@@ -28,6 +28,7 @@ export interface SleeperLeague {
 }
 
 export interface LeagueSettings {
+  draft_rounds?: number;
   wins_bracket: number;
   waiver_type: number;
   waiver_day_of_week: number;

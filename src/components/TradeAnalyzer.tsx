@@ -1,10 +1,20 @@
 'use client';
 
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useRef } from 'react';
 import { SleeperPlayersMap, SleeperRoster, SleeperUser, DraftPickSelection } from '@/lib/types';
 import { getPlayerAvatarUrl } from '@/lib/sleeper';
 import { getPositionTextColor, getTeamName, pickRoundLabel } from '@/lib/utils';
 import { getDraftPickOptions, getPickKey, calculateTradeValue } from '@/lib/rankings';
+import {
+  OwnedPick,
+  PickTier,
+  TierRatios,
+  calculateValueAdjustment,
+  fairTradeBand,
+  netChanges,
+  projectPickTier,
+  tieredPickValue,
+} from '@/lib/tradeCalculator';
 import Image from 'next/image';
 
 interface TradeAnalyzerProps {
@@ -13,19 +23,42 @@ interface TradeAnalyzerProps {
   users: SleeperUser[];
   playerValues: Record<string, number>;
   pickValues: Record<string, number>;
+  // This-season (redraft) values, for the win-now vs long-term view
+  redraftValues: Record<string, number>;
+  // Every future pick in the league and who holds it
+  ownedPicks: OwnedPick[];
+  // Early/Late pick value relative to Mid, per round
+  tierRatios: TierRatios;
 }
 
-interface SelectedPlayer {
+interface PlayerOption {
   id: string;
   name: string;
   position: string;
   team: string;
   value: number;
+  redraftValue: number;
 }
 
+type SelectedPlayer = PlayerOption;
+
 interface SelectedPick {
+  id: string;
   pick: DraftPickSelection;
   value: number;
+  tier: PickTier;
+  // Team whose slot this is; null for a generic pick
+  originalRosterId: number | null;
+}
+
+interface PickOption {
+  id: string;
+  season: string;
+  round: number;
+  tier: PickTier;
+  value: number;
+  originalRosterId: number;
+  ownerRosterId: number;
 }
 
 interface TradeSideState {
@@ -47,7 +80,9 @@ const createEmptySide = (): TradeSideState => ({
 });
 
 const TEAM_LABELS = ['A', 'B', 'C'];
-const TEAM_COLORS = ['sleeper-accent', 'sleeper-green', 'purple-500'];
+
+const ownedPickId = (season: string, round: number, originalRosterId: number) =>
+  `${season}-${round}-${originalRosterId}`;
 
 export default function TradeAnalyzer({
   players,
@@ -55,13 +90,18 @@ export default function TradeAnalyzer({
   users,
   playerValues,
   pickValues,
+  redraftValues,
+  ownedPicks,
+  tierRatios,
 }: TradeAnalyzerProps) {
   const [sides, setSides] = useState<TradeSideState[]>([
     createEmptySide(),
     createEmptySide(),
   ]);
+  const genericPickCounter = useRef(0);
 
   const pickOptions = useMemo(() => getDraftPickOptions(pickValues), [pickValues]);
+  const nextSeason = pickOptions.seasons[0];
 
   // Build team list for dropdowns
   const teamOptions = useMemo(() => {
@@ -76,23 +116,85 @@ export default function TradeAnalyzer({
     }).sort((a, b) => a.teamName.localeCompare(b.teamName));
   }, [rosters, users]);
 
+  const teamNameById = useCallback(
+    (rosterId: number) => teamOptions.find(t => t.rosterId === rosterId)?.teamName || `Team ${rosterId}`,
+    [teamOptions]
+  );
+
+  const toPlayerOption = useCallback((id: string): PlayerOption | null => {
+    const p = players[id];
+    if (!p || !p.full_name) return null;
+    return {
+      id,
+      name: p.full_name,
+      position: p.position || '',
+      team: p.team || 'FA',
+      value: playerValues[id] || 0,
+      redraftValue: redraftValues[id] || 0,
+    };
+  }, [players, playerValues, redraftValues]);
+
   const playersList = useMemo(() => {
     return Object.entries(players)
       .filter(([, p]) => p.fantasy_positions?.length > 0 && p.team && p.full_name)
-      .map(([id, p]) => ({
-        id,
-        name: p.full_name || '',
-        position: p.position || '',
-        team: p.team || 'FA',
-        searchRank: p.search_rank || 9999,
-        value: playerValues[id] || 0,
-      }))
+      .map(([id, p]) => ({ ...toPlayerOption(id)!, searchRank: p.search_rank || 9999 }))
       .sort((a, b) => a.searchRank - b.searchRank);
-  }, [players, playerValues]);
+  }, [players, toPlayerOption]);
 
-  // Get all selected player IDs across all sides
+  // Each team's players, most valuable first
+  const rosterPlayers = useMemo(() => {
+    const map = new Map<number, PlayerOption[]>();
+    for (const roster of rosters) {
+      const list = (roster.players || [])
+        .map(toPlayerOption)
+        .filter((p): p is PlayerOption => p !== null)
+        .sort((a, b) => b.value - a.value);
+      map.set(roster.roster_id, list);
+    }
+    return map;
+  }, [rosters, toPlayerOption]);
+
+  // Projected finish this season from win-now (redraft) roster strength,
+  // used to place each team's next pick early, mid or late
+  const projectedFinish = useMemo(() => {
+    const strength = rosters.map(r => ({
+      rosterId: r.roster_id,
+      total: (r.players || []).reduce((s, id) => s + (redraftValues[id] || 0), 0),
+    }));
+    strength.sort((a, b) => b.total - a.total);
+    return new Map(strength.map((t, i) => [t.rosterId, i + 1]));
+  }, [rosters, redraftValues]);
+
+  // Every future pick, valued for its projected slot, grouped by holder
+  const pickOptionsByOwner = useMemo(() => {
+    const map = new Map<number, PickOption[]>();
+    for (const p of ownedPicks) {
+      const tier = projectPickTier(p.season, nextSeason, projectedFinish.get(p.originalRosterId), rosters.length);
+      const option: PickOption = {
+        id: ownedPickId(p.season, p.round, p.originalRosterId),
+        season: p.season,
+        round: p.round,
+        tier,
+        value: tieredPickValue(p.season, p.round, tier, pickValues, tierRatios),
+        originalRosterId: p.originalRosterId,
+        ownerRosterId: p.ownerRosterId,
+      };
+      if (!map.has(p.ownerRosterId)) map.set(p.ownerRosterId, []);
+      map.get(p.ownerRosterId)!.push(option);
+    }
+    for (const list of map.values()) {
+      list.sort((a, b) => a.season.localeCompare(b.season) || a.round - b.round || b.value - a.value);
+    }
+    return map;
+  }, [ownedPicks, nextSeason, projectedFinish, rosters.length, pickValues, tierRatios]);
+
+  // Get all selected player and pick IDs across all sides
   const allSelectedPlayerIds = useMemo(() => {
-    return sides.flatMap(s => s.players.map(p => p.id));
+    return new Set(sides.flatMap(s => s.players.map(p => p.id)));
+  }, [sides]);
+
+  const allSelectedPickIds = useMemo(() => {
+    return new Set(sides.flatMap(s => s.picks.map(p => p.id)));
   }, [sides]);
 
   // Get all selected team IDs
@@ -100,26 +202,49 @@ export default function TradeAnalyzer({
     return sides.map(s => s.selectedTeam).filter((id): id is number => id !== null);
   }, [sides]);
 
-  // Get filtered players for a specific side
+  // A column lists what its team receives, so its assets come from the
+  // other teams in the trade
+  const sourceTeamsFor = useCallback((sideIndex: number) => {
+    return sides
+      .map((s, idx) => (idx !== sideIndex ? s.selectedTeam : null))
+      .filter((id): id is number => id !== null);
+  }, [sides]);
+
+  // Player suggestions for a side: the trading partners' rosters first
   const getFilteredPlayers = useCallback((sideIndex: number) => {
-    const searchTerm = sides[sideIndex].search.toLowerCase();
-    if (!searchTerm.trim()) return [];
+    const searchTerm = sides[sideIndex].search.toLowerCase().trim();
+    const sourcePlayers = sourceTeamsFor(sideIndex).flatMap(id => rosterPlayers.get(id) || []);
+    const available = (p: PlayerOption) => !allSelectedPlayerIds.has(p.id);
 
-    return playersList
-      .filter(p =>
-        p.name.toLowerCase().includes(searchTerm) &&
-        !allSelectedPlayerIds.includes(p.id)
-      )
-      .slice(0, 10);
-  }, [sides, playersList, allSelectedPlayerIds]);
+    if (!searchTerm) {
+      return sourcePlayers.filter(available).sort((a, b) => b.value - a.value).slice(0, 15);
+    }
 
-  // Calculate totals for each side
+    const sourceIds = new Set(sourcePlayers.map(p => p.id));
+    const matches = (p: PlayerOption) => p.name.toLowerCase().includes(searchTerm) && available(p);
+    const fromSource = sourcePlayers.filter(matches);
+    const others = playersList.filter(p => !sourceIds.has(p.id) && matches(p));
+    return [...fromSource, ...others].slice(0, 10);
+  }, [sides, sourceTeamsFor, rosterPlayers, playersList, allSelectedPlayerIds]);
+
+  const getAvailablePicks = useCallback((sideIndex: number) => {
+    return sourceTeamsFor(sideIndex)
+      .flatMap(id => pickOptionsByOwner.get(id) || [])
+      .filter(p => !allSelectedPickIds.has(p.id));
+  }, [sourceTeamsFor, pickOptionsByOwner, allSelectedPickIds]);
+
+  // Raw totals for each side
   const sideTotals = useMemo(() => {
     return sides.map(side => {
       const playerTotal = side.players.reduce((sum, p) => sum + p.value, 0);
       const pickTotal = side.picks.reduce((sum, p) => sum + p.value, 0);
       return playerTotal + pickTotal;
     });
+  }, [sides]);
+
+  // Win-now totals: picks don't help anyone this season
+  const sideRedraftTotals = useMemo(() => {
+    return sides.map(side => side.players.reduce((sum, p) => sum + p.redraftValue, 0));
   }, [sides]);
 
   // Determine which sides have assets (for partial population handling)
@@ -130,39 +255,64 @@ export default function TradeAnalyzer({
       .map(s => s.idx);
   }, [sides]);
 
+  // Consolidation premium for two-team trades
+  const sideAdjustments = useMemo(() => {
+    const adjustments = sides.map(() => 0);
+    if (populatedSideIndices.length !== 2) return adjustments;
+    const [i1, i2] = populatedSideIndices;
+    const assetValues = (side: TradeSideState) => [
+      ...side.players.map(p => p.value),
+      ...side.picks.map(p => p.value),
+    ];
+    const { adjustments: adj } = calculateValueAdjustment(assetValues(sides[i1]), assetValues(sides[i2]));
+    adjustments[i1] = adj[0];
+    adjustments[i2] = adj[1];
+    return adjustments;
+  }, [sides, populatedSideIndices]);
+
+  const adjustedTotals = useMemo(
+    () => sideTotals.map((total, idx) => total + sideAdjustments[idx]),
+    [sideTotals, sideAdjustments]
+  );
+
+  const sideName = useCallback((idx: number) => {
+    const id = sides[idx].selectedTeam;
+    return id !== null ? teamNameById(id) : `Team ${TEAM_LABELS[idx]}`;
+  }, [sides, teamNameById]);
+
   // Calculate trade for populated sides
   const tradeCalc = useMemo(() => {
     if (populatedSideIndices.length < 2) return null;
 
-    // For 2 populated teams, use existing calculation
+    // For 2 populated teams, compare totals after the value adjustment
     if (populatedSideIndices.length === 2) {
       const [idx1, idx2] = populatedSideIndices;
       return calculateTradeValue(
         {
           players: sides[idx1].players,
           picks: sides[idx1].picks,
-          totalValue: sideTotals[idx1],
+          totalValue: adjustedTotals[idx1],
         },
         {
           players: sides[idx2].players,
           picks: sides[idx2].picks,
-          totalValue: sideTotals[idx2],
-        }
+          totalValue: adjustedTotals[idx2],
+        },
+        [sideName(idx1), sideName(idx2)]
       );
     }
 
-    // For 3 populated teams, custom calculation
+    // For 3 populated teams, compare each side to the average
     const total = populatedSideIndices.reduce((sum, idx) => sum + sideTotals[idx], 0);
     const average = total / populatedSideIndices.length;
     const maxDeviation = Math.max(...populatedSideIndices.map(idx => Math.abs(sideTotals[idx] - average)));
     const deviationPercent = average > 0 ? (maxDeviation / average) * 100 : 0;
-
-    // Balanced if within 10% of average
-    const isBalanced = deviationPercent <= 10;
+    const band = fairTradeBand(average);
 
     return {
       isThreeTeam: true,
-      isBalanced,
+      isBalanced: maxDeviation <= band,
+      band,
       deviationPercent,
       average,
       total,
@@ -173,9 +323,9 @@ export default function TradeAnalyzer({
         deviationPercent: average > 0 ? ((sideTotals[idx] - average) / average) * 100 : 0,
       })),
     };
-  }, [sides, sideTotals, populatedSideIndices]);
+  }, [sides, sideTotals, adjustedTotals, populatedSideIndices, sideName]);
 
-  // Calculate power rankings impact
+  // Team value rank impact: players plus the picks each team holds
   const powerRankingsImpact = useMemo(() => {
     // Need at least 2 teams selected with assets
     const teamsWithAssets = populatedSideIndices
@@ -195,53 +345,52 @@ export default function TradeAnalyzer({
       for (const playerId of roster.players || []) {
         total += playerValues[playerId] || 0;
       }
+      for (const pick of pickOptionsByOwner.get(roster.roster_id) || []) {
+        total += pick.value;
+      }
       teamValues.set(roster.roster_id, total);
     }
 
-    // Get current rankings
-    const getCurrentRank = (rosterId: number) => {
-      const sortedTeams = [...teamValues.entries()].sort((a, b) => b[1] - a[1]);
+    const rankIn = (values: Map<number, number>, rosterId: number) => {
+      const sortedTeams = [...values.entries()].sort((a, b) => b[1] - a[1]);
       return sortedTeams.findIndex(([id]) => id === rosterId) + 1;
     };
 
-    // Each team receives the assets in its column and gives up what the
-    // other columns receive. Two teams: A's change is A - B exactly. With
-    // three, who sends what to whom isn't recorded, so each team is assumed
-    // to fund the other columns evenly: received - (others' total) / (n - 1).
-    // Changes still sum to zero across the trade.
-    const numTeams = teamsWithAssets.length;
-    const totalValue = teamsWithAssets.reduce((sum, t) => sum + sideTotals[t.sideIndex], 0);
-    const netChange = (sideIndex: number) =>
-      sideTotals[sideIndex] - (totalValue - sideTotals[sideIndex]) / (numTeams - 1);
+    const changes = netChanges(teamsWithAssets.map(t => sideTotals[t.sideIndex]));
 
     // Create new values map with trade impact
     const newTeamValues = new Map(teamValues);
-    for (const { sideIndex, teamId } of teamsWithAssets) {
-      const currentValue = teamValues.get(teamId) || 0;
-      const valueChange = netChange(sideIndex);
-      newTeamValues.set(teamId, currentValue + valueChange);
-    }
+    teamsWithAssets.forEach(({ teamId }, i) => {
+      newTeamValues.set(teamId, (teamValues.get(teamId) || 0) + changes[i]);
+    });
 
-    // Get new rankings
-    const getNewRank = (rosterId: number) => {
-      const sortedTeams = [...newTeamValues.entries()].sort((a, b) => b[1] - a[1]);
-      return sortedTeams.findIndex(([id]) => id === rosterId) + 1;
-    };
-
-    return teamsWithAssets.map(({ sideIndex, teamId }) => {
-      const oldRank = getCurrentRank(teamId);
-      const newRank = getNewRank(teamId);
+    return teamsWithAssets.map(({ sideIndex, teamId }, i) => {
+      const oldRank = rankIn(teamValues, teamId);
+      const newRank = rankIn(newTeamValues, teamId);
       return {
         sideIndex,
         rosterId: teamId,
-        name: teamOptions.find(t => t.rosterId === teamId)?.teamName || `Team ${teamId}`,
+        name: teamNameById(teamId),
         oldRank,
         newRank,
         rankChange: oldRank - newRank,
-        valueChange: netChange(sideIndex),
+        valueChange: changes[i],
       };
     });
-  }, [sides, sideTotals, populatedSideIndices, rosters, playerValues, teamOptions]);
+  }, [sides, sideTotals, populatedSideIndices, rosters, playerValues, pickOptionsByOwner, teamNameById]);
+
+  // Win-now vs long-term: this-season vs dynasty change for each team
+  const horizonImpact = useMemo(() => {
+    if (populatedSideIndices.length < 2) return null;
+    const dynasty = netChanges(populatedSideIndices.map(idx => sideTotals[idx]));
+    const winNow = netChanges(populatedSideIndices.map(idx => sideRedraftTotals[idx]));
+    return populatedSideIndices.map((idx, i) => ({
+      sideIndex: idx,
+      name: sideName(idx),
+      dynasty: dynasty[i],
+      winNow: winNow[i],
+    }));
+  }, [populatedSideIndices, sideTotals, sideRedraftTotals, sideName]);
 
   // Handler functions
   const updateSide = useCallback((sideIndex: number, updates: Partial<TradeSideState>) => {
@@ -266,25 +415,43 @@ export default function TradeAnalyzer({
     ));
   }, []);
 
-  const addPick = useCallback((sideIndex: number, season: string, round: number) => {
-    const pick: DraftPickSelection = {
-      season,
-      round,
-      key: getPickKey({ season, round, key: '' }),
-    };
-    const value = pickValues[pick.key] || 0;
-
+  const addSelectedPick = useCallback((sideIndex: number, pick: SelectedPick) => {
     setSides(prev => prev.map((side, idx) =>
       idx === sideIndex
-        ? { ...side, picks: [...side.picks, { pick, value }], showPickSelector: false }
+        ? { ...side, picks: [...side.picks, pick], showPickSelector: false }
         : side
     ));
-  }, [pickValues]);
+  }, []);
 
-  const removePick = useCallback((sideIndex: number, pickIndex: number) => {
+  const addGenericPick = useCallback((sideIndex: number, season: string, round: number) => {
+    genericPickCounter.current += 1;
+    addSelectedPick(sideIndex, {
+      id: `generic-${genericPickCounter.current}`,
+      pick: { season, round, key: getPickKey({ season, round, key: '' }) },
+      value: tieredPickValue(season, round, 'Mid', pickValues, tierRatios),
+      tier: 'Mid',
+      originalRosterId: null,
+    });
+  }, [addSelectedPick, pickValues, tierRatios]);
+
+  const addOwnedPick = useCallback((sideIndex: number, option: PickOption) => {
+    addSelectedPick(sideIndex, {
+      id: option.id,
+      pick: {
+        season: option.season,
+        round: option.round,
+        key: getPickKey({ season: option.season, round: option.round, key: '' }),
+      },
+      value: option.value,
+      tier: option.tier,
+      originalRosterId: option.originalRosterId,
+    });
+  }, [addSelectedPick]);
+
+  const removePick = useCallback((sideIndex: number, pickId: string) => {
     setSides(prev => prev.map((side, idx) =>
       idx === sideIndex
-        ? { ...side, picks: side.picks.filter((_, i) => i !== pickIndex) }
+        ? { ...side, picks: side.picks.filter(p => p.id !== pickId) }
         : side
     ));
   }, []);
@@ -307,16 +474,18 @@ export default function TradeAnalyzer({
 
   // Format value for display
   const formatValue = (value: number) => {
-    return value.toLocaleString();
+    return Math.round(value).toLocaleString();
   };
+
+  const formatSigned = (value: number) => (value >= 0 ? '+' : '') + formatValue(value);
 
   // Check if there are any assets
   const hasAnyAssets = sides.some(s => s.players.length > 0 || s.picks.length > 0);
 
   // Calculate percentages for bar display
-  const totalValue = sideTotals.reduce((sum, val) => sum + val, 0);
+  const totalValue = adjustedTotals.reduce((sum, val) => sum + val, 0);
   const sidePercents = totalValue > 0
-    ? sideTotals.map(val => (val / totalValue) * 100)
+    ? adjustedTotals.map(val => (val / totalValue) * 100)
     : sides.map(() => 100 / sides.length);
 
   return (
@@ -344,7 +513,7 @@ export default function TradeAnalyzer({
       </div>
 
       {/* Team Selection */}
-      <div className={`grid gap-4 mb-4 ${sides.length === 3 ? 'md:grid-cols-3' : 'md:grid-cols-2'}`}>
+      <div className={`grid gap-4 mb-2 ${sides.length === 3 ? 'md:grid-cols-3' : 'md:grid-cols-2'}`}>
         {sides.map((side, idx) => (
           <div key={idx}>
             <div className="flex items-center justify-between mb-1">
@@ -379,27 +548,40 @@ export default function TradeAnalyzer({
           </div>
         ))}
       </div>
+      <p className="text-xs text-gray-500 mb-4">
+        Select teams to add straight from their rosters and the picks they own. Next year&apos;s
+        picks are valued early, mid or late by each team&apos;s projected finish.
+      </p>
 
       <div className={`grid gap-4 ${sides.length === 3 ? 'md:grid-cols-3' : 'md:grid-cols-2'}`}>
-        {sides.map((side, sideIndex) => (
-          <TradeSide
-            key={sideIndex}
-            sideIndex={sideIndex}
-            side={side}
-            sideTotal={sideTotals[sideIndex]}
-            teamLabel={TEAM_LABELS[sideIndex]}
-            teamOptions={teamOptions}
-            filteredPlayers={getFilteredPlayers(sideIndex)}
-            pickOptions={pickOptions}
-            pickValues={pickValues}
-            onUpdateSide={updateSide}
-            onAddPlayer={addPlayer}
-            onRemovePlayer={removePlayer}
-            onAddPick={addPick}
-            onRemovePick={removePick}
-            formatValue={formatValue}
-          />
-        ))}
+        {sides.map((side, sideIndex) => {
+          const sourceTeams = sourceTeamsFor(sideIndex);
+          return (
+            <TradeSide
+              key={sideIndex}
+              sideIndex={sideIndex}
+              side={side}
+              sideTotal={sideTotals[sideIndex]}
+              adjustment={sideAdjustments[sideIndex]}
+              teamLabel={TEAM_LABELS[sideIndex]}
+              teamName={side.selectedTeam !== null ? teamNameById(side.selectedTeam) : null}
+              sourceNames={sourceTeams.map(teamNameById)}
+              teamNameById={teamNameById}
+              filteredPlayers={side.showSearch ? getFilteredPlayers(sideIndex) : []}
+              availablePicks={getAvailablePicks(sideIndex)}
+              hasSourceTeams={sourceTeams.length > 0}
+              pickOptions={pickOptions}
+              pickValues={pickValues}
+              onUpdateSide={updateSide}
+              onAddPlayer={addPlayer}
+              onRemovePlayer={removePlayer}
+              onAddGenericPick={addGenericPick}
+              onAddOwnedPick={addOwnedPick}
+              onRemovePick={removePick}
+              formatValue={formatValue}
+            />
+          );
+        })}
       </div>
 
       {/* Trade comparison bar and verdict */}
@@ -464,15 +646,11 @@ export default function TradeAnalyzer({
                   {!tradeCalc.isBalanced && (
                     <div className="text-sm text-gray-400 mt-1">
                       {tradeCalc.sideValues.map(sv => {
-                        const label = TEAM_LABELS[sv.index];
-                        const teamName = sides[sv.index].selectedTeam !== null
-                          ? teamOptions.find(t => t.rosterId === sides[sv.index].selectedTeam)?.teamName
-                          : `Team ${label}`;
                         const diff = sv.deviation;
-                        if (Math.abs(diff) < tradeCalc.average * 0.05) return null;
+                        if (Math.abs(diff) <= tradeCalc.band) return null;
                         return (
                           <span key={sv.index} className="block">
-                            {teamName}: {diff > 0 ? '+' : ''}{formatValue(Math.round(diff))} ({diff > 0 ? 'over' : 'under'} average)
+                            {sideName(sv.index)}: {formatSigned(diff)} ({diff > 0 ? 'over' : 'under'} average)
                           </span>
                         );
                       })}
@@ -490,20 +668,54 @@ export default function TradeAnalyzer({
                   }`}>
                     {tradeCalc.verdictText}
                   </p>
-                  {tradeCalc.verdict !== 'fair' && (
-                    <p className="text-sm text-gray-400">
-                      {formatValue(tradeCalc.valueDiff)} value difference
-                    </p>
-                  )}
+                  <p className="text-sm text-gray-400">
+                    {tradeCalc.verdict !== 'fair'
+                      ? `${formatValue(tradeCalc.valueDiff)} value difference`
+                      : `Within ${formatValue(fairTradeBand(Math.max(tradeCalc.side1.totalValue, tradeCalc.side2.totalValue)))} either way`}
+                    {sideAdjustments.some(a => a > 0) && ' · includes value adjustment'}
+                  </p>
                 </>
               )}
             </div>
           )}
 
-          {/* Power Rankings Impact */}
+          {/* Win-now vs long-term */}
+          {horizonImpact && (
+            <div className="bg-gray-800 rounded-lg p-4">
+              <h3 className="text-sm font-semibold text-gray-400 mb-1">Win-Now vs Long-Term</h3>
+              <p className="text-xs text-gray-500 mb-3">
+                Long-term uses dynasty values; this season uses redraft values, where picks count for nothing.
+              </p>
+              <div className="space-y-2">
+                {horizonImpact.map(team => (
+                  <div key={team.sideIndex} className="flex flex-wrap items-center gap-x-4 gap-y-1">
+                    <span className="text-white truncate flex-1 min-w-[8rem]">{team.name}</span>
+                    <span className="text-sm">
+                      <span className="text-gray-500">Long-term </span>
+                      <span className={team.dynasty >= 0 ? 'text-sleeper-green' : 'text-sleeper-red'}>
+                        {formatSigned(team.dynasty)}
+                      </span>
+                    </span>
+                    <span className="text-sm">
+                      <span className="text-gray-500">This season </span>
+                      <span className={team.winNow >= 0 ? 'text-sleeper-green' : 'text-sleeper-red'}>
+                        {formatSigned(team.winNow)}
+                      </span>
+                    </span>
+                    <span className="text-xs px-2 py-0.5 rounded bg-gray-700 text-gray-300">
+                      {horizonLabel(team.dynasty, team.winNow)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Team value rank impact */}
           {powerRankingsImpact && powerRankingsImpact.length >= 2 && (
             <div className="bg-gray-800 rounded-lg p-4">
-              <h3 className="text-sm font-semibold text-gray-400 mb-3">Power Rankings Impact</h3>
+              <h3 className="text-sm font-semibold text-gray-400 mb-1">Team Value Rank Impact</h3>
+              <p className="text-xs text-gray-500 mb-3">League rank by total dynasty value of players plus owned picks.</p>
               <div className={`grid gap-4 ${powerRankingsImpact.length === 3 ? 'md:grid-cols-3' : 'md:grid-cols-2'}`}>
                 {powerRankingsImpact.map((team) => (
                   <div key={team.rosterId} className="flex items-center justify-between">
@@ -534,21 +746,41 @@ export default function TradeAnalyzer({
   );
 }
 
+// Short read on what kind of move this is for a team
+function horizonLabel(dynasty: number, winNow: number): string {
+  const noise = 250;
+  const gainsLong = dynasty > noise;
+  const losesLong = dynasty < -noise;
+  const gainsNow = winNow > noise;
+  const losesNow = winNow < -noise;
+  if (gainsLong && gainsNow) return 'Wins both';
+  if (losesLong && losesNow) return 'Loses both';
+  if (gainsNow) return 'Win-now move';
+  if (gainsLong) return 'Rebuilding move';
+  return 'Roughly even';
+}
+
 // Trade Side Component
 interface TradeSideProps {
   sideIndex: number;
   side: TradeSideState;
   sideTotal: number;
+  adjustment: number;
   teamLabel: string;
-  teamOptions: { rosterId: number; teamName: string }[];
-  filteredPlayers: { id: string; name: string; position: string; team: string; value: number }[];
+  teamName: string | null;
+  sourceNames: string[];
+  teamNameById: (rosterId: number) => string;
+  filteredPlayers: PlayerOption[];
+  availablePicks: PickOption[];
+  hasSourceTeams: boolean;
   pickOptions: ReturnType<typeof getDraftPickOptions>;
   pickValues: Record<string, number>;
   onUpdateSide: (sideIndex: number, updates: Partial<TradeSideState>) => void;
   onAddPlayer: (sideIndex: number, player: SelectedPlayer) => void;
   onRemovePlayer: (sideIndex: number, playerId: string) => void;
-  onAddPick: (sideIndex: number, season: string, round: number) => void;
-  onRemovePick: (sideIndex: number, pickIndex: number) => void;
+  onAddGenericPick: (sideIndex: number, season: string, round: number) => void;
+  onAddOwnedPick: (sideIndex: number, option: PickOption) => void;
+  onRemovePick: (sideIndex: number, pickId: string) => void;
   formatValue: (value: number) => string;
 }
 
@@ -556,23 +788,26 @@ function TradeSide({
   sideIndex,
   side,
   sideTotal,
+  adjustment,
   teamLabel,
-  teamOptions,
+  teamName,
+  sourceNames,
+  teamNameById,
   filteredPlayers,
+  availablePicks,
+  hasSourceTeams,
   pickOptions,
   pickValues,
   onUpdateSide,
   onAddPlayer,
   onRemovePlayer,
-  onAddPick,
+  onAddGenericPick,
+  onAddOwnedPick,
   onRemovePick,
   formatValue,
 }: TradeSideProps) {
-  const teamName = side.selectedTeam !== null
-    ? teamOptions.find(t => t.rosterId === side.selectedTeam)?.teamName
-    : null;
-
   const hasNoAssets = side.players.length === 0 && side.picks.length === 0;
+  const fromLabel = sourceNames.length > 0 ? ` from ${sourceNames.join(' / ')}` : '';
 
   return (
     <div className="space-y-3">
@@ -606,6 +841,7 @@ function TradeSide({
             <button
               onClick={() => onRemovePlayer(sideIndex, player.id)}
               className="text-gray-500 hover:text-sleeper-red transition-colors"
+              aria-label={`Remove ${player.name}`}
             >
               <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -615,9 +851,9 @@ function TradeSide({
         ))}
 
         {/* Selected picks */}
-        {side.picks.map((pickItem, idx) => (
+        {side.picks.map(pickItem => (
           <div
-            key={`pick-${idx}`}
+            key={pickItem.id}
             className="flex items-center gap-2 p-2 bg-gray-800/50 rounded-lg"
           >
             <div className="w-8 h-8 rounded-full bg-sleeper-accent/20 flex items-center justify-center">
@@ -626,15 +862,23 @@ function TradeSide({
               </span>
             </div>
             <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium text-white">{pickItem.pick.key}</p>
-              <p className="text-xs text-gray-400">Draft Pick</p>
+              <p className="text-sm font-medium text-white">
+                {pickItem.pick.key}
+                {pickItem.tier !== 'Mid' && <span className="text-gray-400 font-normal"> ({pickItem.tier})</span>}
+              </p>
+              <p className="text-xs text-gray-400 truncate">
+                {pickItem.originalRosterId !== null
+                  ? `${teamNameById(pickItem.originalRosterId)}'s pick`
+                  : 'Draft Pick'}
+              </p>
             </div>
             <span className="text-sm text-sleeper-accent font-medium">
               {formatValue(pickItem.value)}
             </span>
             <button
-              onClick={() => onRemovePick(sideIndex, idx)}
+              onClick={() => onRemovePick(sideIndex, pickItem.id)}
               className="text-gray-500 hover:text-sleeper-red transition-colors"
+              aria-label={`Remove ${pickItem.pick.key}`}
             >
               <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -657,12 +901,15 @@ function TradeSide({
       <div className="relative">
         <input
           type="text"
-          placeholder="+ Add Player"
+          placeholder={`+ Add Player${fromLabel}`}
           value={side.search}
           onChange={(e) => {
             onUpdateSide(sideIndex, { search: e.target.value, showSearch: true });
           }}
           onFocus={() => onUpdateSide(sideIndex, { showSearch: true })}
+          // The input keeps focus after a pick, so a click must reopen the list
+          onClick={() => !side.showSearch && onUpdateSide(sideIndex, { showSearch: true })}
+          onBlur={() => onUpdateSide(sideIndex, { showSearch: false })}
           className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-gray-500 text-sm focus:outline-none focus:border-sleeper-accent"
         />
 
@@ -671,6 +918,9 @@ function TradeSide({
             {filteredPlayers.map(player => (
               <button
                 key={player.id}
+                // Keep focus in the input so blur doesn't close the list
+                // before the click lands
+                onMouseDown={(e) => e.preventDefault()}
                 onClick={() => onAddPlayer(sideIndex, player)}
                 className="w-full flex items-center gap-2 p-2 hover:bg-gray-700 transition-colors text-left"
               >
@@ -697,17 +947,32 @@ function TradeSide({
       <PickSelector
         show={side.showPickSelector}
         onToggle={() => onUpdateSide(sideIndex, { showPickSelector: !side.showPickSelector })}
-        onAdd={(season, round) => onAddPick(sideIndex, season, round)}
+        onAddGeneric={(season, round) => onAddGenericPick(sideIndex, season, round)}
+        onAddOwned={(option) => onAddOwnedPick(sideIndex, option)}
+        availablePicks={availablePicks}
+        hasSourceTeams={hasSourceTeams}
+        fromLabel={fromLabel}
+        teamNameById={teamNameById}
         pickOptions={pickOptions}
         pickValues={pickValues}
+        formatValue={formatValue}
       />
 
       {/* Side Total */}
-      <div className="pt-2 border-t border-gray-700">
+      <div className="pt-2 border-t border-gray-700 space-y-1">
         <div className="flex justify-between items-center">
           <span className="text-sm text-gray-400">Total:</span>
-          <span className="text-lg font-bold text-white">{formatValue(sideTotal)}</span>
+          <span className="text-lg font-bold text-white">{formatValue(sideTotal + adjustment)}</span>
         </div>
+        {adjustment > 0 && (
+          <div
+            className="flex justify-between items-center text-xs"
+            title="Receiving fewer, better pieces: the other side's extra depth pieces count for less"
+          >
+            <span className="text-gray-500">Includes value adjustment</span>
+            <span className="text-sleeper-green">+{formatValue(adjustment)}</span>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -717,20 +982,40 @@ function TradeSide({
 interface PickSelectorProps {
   show: boolean;
   onToggle: () => void;
-  onAdd: (season: string, round: number) => void;
+  onAddGeneric: (season: string, round: number) => void;
+  onAddOwned: (option: PickOption) => void;
+  availablePicks: PickOption[];
+  hasSourceTeams: boolean;
+  fromLabel: string;
+  teamNameById: (rosterId: number) => string;
   pickOptions: ReturnType<typeof getDraftPickOptions>;
   pickValues: Record<string, number>;
+  formatValue: (value: number) => string;
 }
 
-function PickSelector({ show, onToggle, onAdd, pickOptions, pickValues }: PickSelectorProps) {
+function PickSelector({
+  show,
+  onToggle,
+  onAddGeneric,
+  onAddOwned,
+  availablePicks,
+  hasSourceTeams,
+  fromLabel,
+  teamNameById,
+  pickOptions,
+  pickValues,
+  formatValue,
+}: PickSelectorProps) {
   const [season, setSeason] = useState(pickOptions.seasons[0]);
   const [round, setRound] = useState(1);
+  const [generic, setGeneric] = useState(false);
 
   const currentKey = `${season} ${pickRoundLabel(round)}`;
   const currentValue = pickValues[currentKey] || 0;
 
-  const handleAdd = () => {
-    onAdd(season, round);
+  const close = () => {
+    setGeneric(false);
+    onToggle();
   };
 
   if (!show) {
@@ -739,8 +1024,53 @@ function PickSelector({ show, onToggle, onAdd, pickOptions, pickValues }: PickSe
         onClick={onToggle}
         className="w-full px-3 py-2 bg-gray-800 border border-gray-700 border-dashed rounded-lg text-gray-500 text-sm hover:border-sleeper-accent hover:text-sleeper-accent transition-colors"
       >
-        + Add Pick
+        + Add Pick{fromLabel}
       </button>
+    );
+  }
+
+  // Trading partners selected: list the picks they actually hold
+  if (hasSourceTeams && !generic) {
+    return (
+      <div className="p-3 bg-gray-800 border border-gray-700 rounded-lg space-y-2">
+        <div className="max-h-60 overflow-y-auto">
+          {availablePicks.length === 0 && (
+            <p className="text-xs text-gray-500 py-2">No remaining picks{fromLabel}.</p>
+          )}
+          {availablePicks.map(option => (
+            <button
+              key={option.id}
+              onClick={() => onAddOwned(option)}
+              className="w-full flex items-center gap-2 py-1.5 px-1 hover:bg-gray-700 transition-colors text-left rounded"
+            >
+              <span className="text-sm text-white">
+                {option.season} {pickRoundLabel(option.round)}
+                {option.tier !== 'Mid' && <span className="text-gray-400"> ({option.tier})</span>}
+              </span>
+              <span className="text-xs text-gray-500 flex-1 truncate">
+                {option.originalRosterId !== option.ownerRosterId
+                  ? `via ${teamNameById(option.originalRosterId)}`
+                  : ''}
+              </span>
+              <span className="text-xs text-sleeper-accent">{formatValue(option.value)}</span>
+            </button>
+          ))}
+        </div>
+        <div className="flex items-center justify-between">
+          <button
+            onClick={() => setGeneric(true)}
+            className="text-xs text-gray-500 hover:text-white transition-colors"
+          >
+            Add a generic pick instead
+          </button>
+          <button
+            onClick={close}
+            className="px-3 py-1 text-sm text-gray-400 hover:text-white transition-colors"
+          >
+            Close
+          </button>
+        </div>
+      </div>
     );
   }
 
@@ -778,13 +1108,16 @@ function PickSelector({ show, onToggle, onAdd, pickOptions, pickValues }: PickSe
         </span>
         <div className="flex gap-2">
           <button
-            onClick={onToggle}
+            onClick={close}
             className="px-3 py-1 text-sm text-gray-400 hover:text-white transition-colors"
           >
             Cancel
           </button>
           <button
-            onClick={handleAdd}
+            onClick={() => {
+              setGeneric(false);
+              onAddGeneric(season, round);
+            }}
             className="px-3 py-1 bg-sleeper-accent text-black text-sm font-medium rounded hover:bg-sleeper-accent/80 transition-colors"
           >
             Add

@@ -1,5 +1,6 @@
 // Power Rankings from external sources
 import { FantasyCalcSettings, DraftPickSelection, TradeCalculation, TradeSide } from './types';
+import { isFairTrade } from './tradeCalculator';
 import { parseCSVLine, normalizePlayerName, pickRoundLabel } from './utils';
 
 export interface TeamPowerRanking {
@@ -19,6 +20,7 @@ export interface FantasyCalcPlayer {
     maybeTeam: string;
   };
   value: number;
+  redraftValue?: number;
   overallRank: number;
   positionRank: number;
 }
@@ -26,6 +28,9 @@ export interface FantasyCalcPlayer {
 export interface FantasyCalcValues {
   playerValues: Map<string, number>;
   pickValues: Map<string, number>;  // Key format: "2025 Mid 1st"
+  // This-season (redraft) value by Sleeper ID: what a player is worth to a
+  // contender right now, as opposed to their long-term dynasty value
+  redraftValues: Map<string, number>;
 }
 
 // Fetch FantasyCalc dynasty player values with configurable settings
@@ -51,6 +56,7 @@ export async function fetchFantasyCalcValues(
     const data: FantasyCalcPlayer[] = await response.json();
     const playerValues = new Map<string, number>();
     const pickValues = new Map<string, number>();
+    const redraftValues = new Map<string, number>();
 
     for (const item of data) {
       // Check if it's a draft pick first (by name pattern or position)
@@ -60,13 +66,14 @@ export async function fetchFantasyCalcValues(
       } else if (item.player?.sleeperId) {
         // Regular players
         playerValues.set(item.player.sleeperId, item.value || 0);
+        redraftValues.set(item.player.sleeperId, item.redraftValue || 0);
       }
     }
 
-    return { playerValues, pickValues };
+    return { playerValues, pickValues, redraftValues };
   } catch (error) {
     console.error('Error fetching FantasyCalc values:', error);
-    return { playerValues: new Map(), pickValues: new Map() };
+    return { playerValues: new Map(), pickValues: new Map(), redraftValues: new Map() };
   }
 }
 
@@ -117,7 +124,8 @@ export function getDraftPickOptions(
 // Calculate trade value and verdict
 export function calculateTradeValue(
   side1: TradeSide,
-  side2: TradeSide
+  side2: TradeSide,
+  labels: [string, string] = ['Team A', 'Team B']
 ): TradeCalculation {
   const total1 = side1.totalValue;
   const total2 = side2.totalValue;
@@ -128,15 +136,15 @@ export function calculateTradeValue(
   let verdict: 'fair' | 'side1_wins' | 'side2_wins';
   let verdictText: string;
 
-  if (percentDiff <= 5) {
+  if (isFairTrade(total1, total2)) {
     verdict = 'fair';
     verdictText = 'Fair Trade';
   } else if (total1 > total2) {
     verdict = 'side1_wins';
-    verdictText = `Team A wins by ~${Math.round(percentDiff)}%`;
+    verdictText = `${labels[0]} wins by ~${Math.round(percentDiff)}%`;
   } else {
     verdict = 'side2_wins';
-    verdictText = `Team B wins by ~${Math.round(percentDiff)}%`;
+    verdictText = `${labels[1]} wins by ~${Math.round(percentDiff)}%`;
   }
 
   return {

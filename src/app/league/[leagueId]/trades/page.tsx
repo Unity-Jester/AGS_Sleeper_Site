@@ -5,9 +5,11 @@ import {
   getAllPlayers,
   getAllHistoricalTrades,
   getAllHistoricalDrafts,
+  getTradedPicks,
   buildClientPlayersMap,
 } from '@/lib/sleeper';
-import { fetchFantasyCalcValues } from '@/lib/rankings';
+import { fetchFantasyCalcValues, getDraftPickOptions } from '@/lib/rankings';
+import { buildOwnedPicks, deriveTierRatios } from '@/lib/tradeCalculator';
 import { generateAllReportCards } from '@/lib/tradeAnalysis';
 import { fetchHistoricalValues, buildPlayerNameMapping } from '@/lib/historicalValues';
 import { estimateScaleFactor } from '@/lib/vault';
@@ -55,7 +57,7 @@ export default async function TradesPage({ params }: LeaguePageProps) {
 
   try {
     // Fetch all data in parallel
-    const [league, users, rosters, players, allSeasonTrades, draftMap, historicalData] = await Promise.all([
+    const [league, users, rosters, players, allSeasonTrades, draftMap, historicalData, tradedPicks] = await Promise.all([
       getLeague(leagueId),
       getLeagueUsers(leagueId),
       getLeagueRosters(leagueId),
@@ -63,6 +65,7 @@ export default async function TradesPage({ params }: LeaguePageProps) {
       getAllHistoricalTrades(leagueId),
       getAllHistoricalDrafts(leagueId),
       fetchHistoricalValues(),
+      getTradedPicks(leagueId).catch(() => []),
     ]);
 
     // Derive league settings for FantasyCalc API
@@ -73,7 +76,7 @@ export default async function TradesPage({ params }: LeaguePageProps) {
     );
 
     // Fetch player and pick values (for fallback)
-    const { playerValues, pickValues } = await fetchFantasyCalcValues(settings);
+    const { playerValues, pickValues, redraftValues } = await fetchFantasyCalcValues(settings);
 
     // Convert Maps to serializable objects for client component
     const playerValuesObj = Object.fromEntries(playerValues);
@@ -123,6 +126,22 @@ export default async function TradesPage({ params }: LeaguePageProps) {
       ...rosteredPlayerIds,
     ]);
 
+    // Trade calculator inputs: who owns which future picks, how much an
+    // early or late slot is worth relative to a mid one, and this-season
+    // values for the players the calculator can show
+    const ownedPicks = buildOwnedPicks(
+      rosters.map(r => r.roster_id),
+      tradedPicks,
+      getDraftPickOptions(pickValuesObj).seasons,
+      league.settings?.draft_rounds || 4
+    );
+    const tierRatios = deriveTierRatios(historicalData.dates, historicalData.values);
+    const clientRedraftValues: Record<string, number> = {};
+    for (const id of Object.keys(clientPlayers)) {
+      const v = redraftValues.get(id);
+      if (v) clientRedraftValues[id] = v;
+    }
+
     return (
       <div className="space-y-8">
         <div>
@@ -146,6 +165,9 @@ export default async function TradesPage({ params }: LeaguePageProps) {
           users={users}
           playerValues={playerValuesObj}
           pickValues={pickValuesObj}
+          redraftValues={clientRedraftValues}
+          ownedPicks={ownedPicks}
+          tierRatios={tierRatios}
         />
 
         {/* Trade Report Cards */}

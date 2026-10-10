@@ -1,31 +1,26 @@
 'use client';
 
-import { usePathname, useRouter, useSearchParams } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { cn } from '@/lib/utils';
+import { weekLabel } from '@/lib/leagueWeeks';
 
 interface WeekSelectorProps {
   currentWeek: number;
   totalWeeks: number;
-  playoffStart: number;
+  playoffSettings: { playoff_week_start: number; playoff_teams: number; playoff_round_type: number };
   seasonParam?: string;
 }
 
-export default function WeekSelector({ currentWeek, totalWeeks, playoffStart, seasonParam }: WeekSelectorProps) {
+export default function WeekSelector({ currentWeek, totalWeeks, playoffSettings, seasonParam }: WeekSelectorProps) {
   const router = useRouter();
   const pathname = usePathname();
-  const searchParams = useSearchParams();
 
   const handleWeekChange = (week: number) => {
     const params = new URLSearchParams();
     params.set('week', week.toString());
-    // Preserve season parameter if set
+    // Stay on the season being viewed
     if (seasonParam) {
       params.set('season', seasonParam);
-    } else {
-      const existingSeason = searchParams.get('season');
-      if (existingSeason) {
-        params.set('season', existingSeason);
-      }
     }
     router.push(`${pathname}?${params.toString()}`);
   };
@@ -56,7 +51,7 @@ export default function WeekSelector({ currentWeek, totalWeeks, playoffStart, se
       >
         {weeks.map((week) => (
           <option key={week} value={week}>
-            {week < playoffStart ? `Week ${week}` : `Playoffs Rd ${week - playoffStart + 1}`}
+            {weekLabel(playoffSettings, week)}
           </option>
         ))}
       </select>

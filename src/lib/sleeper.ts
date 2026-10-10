@@ -15,6 +15,7 @@ import {
 import { getTeamName } from './utils';
 import type { TradedPickRecord } from './tradeCalculator';
 import { resolveDraftedRosters, correctSlotOwners } from './draftAttribution';
+import { lastRegularSeasonWeek, playoffRoundWeeks, scoredThroughWeek } from './leagueWeeks';
 
 const SLEEPER_API_BASE = 'https://api.sleeper.app/v1';
 
@@ -150,8 +151,10 @@ export function pairMatchups(
 ): MatchupPair[] {
   const matchupMap = new Map<number, SleeperMatchup[]>();
 
-  // Group matchups by matchup_id
+  // Group matchups by matchup_id (null = no game this week, e.g. a
+  // playoff bye or an eliminated team)
   matchups.forEach(m => {
+    if (!m.matchup_id) return;
     const existing = matchupMap.get(m.matchup_id) || [];
     existing.push(m);
     matchupMap.set(m.matchup_id, existing);
@@ -304,6 +307,8 @@ export interface DraftedPlayer {
   rosterId: number;
   playerId: string;
   playerName: string;
+  // When the draft started
+  draftedAt?: number;
 }
 
 // Get all draft picks from all historical seasons
@@ -376,6 +381,7 @@ async function buildDraftMap(leagueIds: string[]): Promise<Map<string, DraftedPl
         round: pick.round,
         pick: pick.pick_no,
         rosterId: drafters.get(pick.pick_no) ?? pick.roster_id,
+        draftedAt: draft.start_time || draft.created,
         playerId: pick.player_id,
         playerName: pick.metadata?.first_name && pick.metadata?.last_name
           ? `${pick.metadata.first_name} ${pick.metadata.last_name}`
@@ -456,51 +462,86 @@ export interface HeadToHeadRecord {
   matchups: number;
 }
 
-// Calculate head-to-head records across all seasons
+// Calculate head-to-head records across all seasons.
+//
+// Regular season: every final week (the week in progress is skipped
+// until Sleeper scores it). Playoffs: winners-bracket games, decided by
+// the bracket's own winner and scored over every week of the round, so a
+// two-week championship counts once, on aggregate. Consolation games
+// (5th place and the losers bracket) aren't head-to-head games.
 export async function getHeadToHeadRecords(
   currentLeagueId: string
 ): Promise<Map<string, HeadToHeadRecord>> {
   const h2hMap = new Map<string, HeadToHeadRecord>();
 
-  // Walk the league chain once, then fetch each season's rosters and
-  // matchup weeks concurrently instead of one request at a time.
+  // Walk the league chain once, then fetch each season's rosters, matchup
+  // weeks and bracket concurrently instead of one request at a time.
   const leagueChain = await getLeagueHistory(currentLeagueId).catch(() => [] as SleeperLeague[]);
 
   const seasons = await Promise.all(
     leagueChain.map(async league => {
       try {
-        const totalWeeks = league.settings.playoff_week_start + 2;
-        const weeks = Array.from({ length: totalWeeks }, (_, i) => i + 1);
-        const [rosters, weeklyMatchups] = await Promise.all([
+        const scoredThrough = scoredThroughWeek(league);
+        const weeks = Array.from({ length: scoredThrough }, (_, i) => i + 1);
+        const [rosters, weeklyMatchups, bracket] = await Promise.all([
           getLeagueRosters(league.league_id),
           Promise.all(
             weeks.map(week =>
               getLeagueMatchups(league.league_id, week).catch(() => [] as SleeperMatchup[])
             )
           ),
+          scoredThrough > lastRegularSeasonWeek(league.settings)
+            ? getPlayoffBracket(league.league_id).catch(() => [] as PlayoffMatchup[])
+            : Promise.resolve([] as PlayoffMatchup[]),
         ]);
-        return { rosters, weeklyMatchups };
+        return { league, rosters, weeklyMatchups, bracket };
       } catch {
         return null;
       }
     })
   );
 
+  const addGame = (owner1: string, owner2: string, points1: number, points2: number, winner: 1 | 2 | 0) => {
+    const key = [owner1, owner2].sort().join('_');
+    const record = h2hMap.get(key) || {
+      owner1Wins: 0,
+      owner2Wins: 0,
+      ties: 0,
+      owner1Points: 0,
+      owner2Points: 0,
+      matchups: 0,
+    };
+    record.matchups++;
+
+    // Orient to the sorted key's owner1
+    const flipped = key.split('_')[0] !== owner1;
+    record.owner1Points += flipped ? points2 : points1;
+    record.owner2Points += flipped ? points1 : points2;
+    if (winner === 0) record.ties++;
+    else if ((winner === 1) !== flipped) record.owner1Wins++;
+    else record.owner2Wins++;
+
+    h2hMap.set(key, record);
+  };
+
   for (const season of seasons) {
     if (!season) continue;
+    const { league, rosters, weeklyMatchups, bracket } = season;
 
     // Build roster_id to owner_id map
     const rosterToOwner = new Map<number, string>();
-    season.rosters.forEach(r => {
+    rosters.forEach(r => {
       if (r.owner_id) {
         rosterToOwner.set(r.roster_id, r.owner_id);
       }
     });
 
-    for (const matchups of season.weeklyMatchups) {
+    // Regular season
+    const regularWeeks = weeklyMatchups.slice(0, lastRegularSeasonWeek(league.settings));
+    for (const matchups of regularWeeks) {
       // Group matchups by matchup_id
       const matchupGroups = new Map<number, typeof matchups>();
-          matchups.forEach(m => {
+      matchups.forEach(m => {
         if (m.matchup_id) {
           const group = matchupGroups.get(m.matchup_id) || [];
           group.push(m);
@@ -508,54 +549,44 @@ export async function getHeadToHeadRecords(
         }
       });
 
-      // Process each matchup
       matchupGroups.forEach(group => {
-        if (group.length === 2) {
-          const [m1, m2] = group;
-          const owner1 = rosterToOwner.get(m1.roster_id);
-          const owner2 = rosterToOwner.get(m2.roster_id);
+        if (group.length !== 2) return;
+        const [m1, m2] = group;
+        const owner1 = rosterToOwner.get(m1.roster_id);
+        const owner2 = rosterToOwner.get(m2.roster_id);
+        if (!owner1 || !owner2 || owner1 === owner2) return;
 
-          if (owner1 && owner2 && owner1 !== owner2) {
-            // Create consistent key (alphabetically sorted)
-            const key = [owner1, owner2].sort().join('_');
-            const record = h2hMap.get(key) || {
-              owner1Wins: 0,
-              owner2Wins: 0,
-              ties: 0,
-              owner1Points: 0,
-              owner2Points: 0,
-              matchups: 0,
-            };
-
-            const points1 = m1.points || 0;
-            const points2 = m2.points || 0;
-
-            // Only count if there are actual points (game was played)
-            if (points1 > 0 || points2 > 0) {
-              record.matchups++;
-
-              // Determine which owner is "owner1" in the sorted key
-              const isOwner1First = [owner1, owner2].sort()[0] === owner1;
-
-              if (isOwner1First) {
-                record.owner1Points += points1;
-                record.owner2Points += points2;
-                if (points1 > points2) record.owner1Wins++;
-                else if (points2 > points1) record.owner2Wins++;
-                else record.ties++;
-              } else {
-                record.owner1Points += points2;
-                record.owner2Points += points1;
-                if (points2 > points1) record.owner1Wins++;
-                else if (points1 > points2) record.owner2Wins++;
-                else record.ties++;
-              }
-
-              h2hMap.set(key, record);
-            }
-          }
-        }
+        const points1 = m1.points || 0;
+        const points2 = m2.points || 0;
+        // A scored week with no points at all wasn't played
+        if (points1 === 0 && points2 === 0) return;
+        addGame(owner1, owner2, points1, points2, points1 > points2 ? 1 : points2 > points1 ? 2 : 0);
       });
+    }
+
+    // Playoffs: decided winners-bracket games, scored over the round's weeks
+    for (const game of bracket) {
+      const t1 = game.t1 ?? game.team_1_roster_id;
+      const t2 = game.t2 ?? game.team_2_roster_id;
+      const winner = game.w ?? game.winner_roster_id;
+      const round = game.r ?? game.round;
+      const placement = game.p;
+      if (!t1 || !t2 || !winner || !round) continue;
+      if (placement !== undefined && placement !== 1 && placement !== 3) continue;
+
+      const owner1 = rosterToOwner.get(t1);
+      const owner2 = rosterToOwner.get(t2);
+      if (!owner1 || !owner2 || owner1 === owner2) continue;
+
+      const roundWeeks = playoffRoundWeeks(league.settings, round);
+      let points1 = 0;
+      let points2 = 0;
+      for (const week of roundWeeks) {
+        const matchups = weeklyMatchups[week - 1] || [];
+        points1 += matchups.find(m => m.roster_id === t1)?.points || 0;
+        points2 += matchups.find(m => m.roster_id === t2)?.points || 0;
+      }
+      addGame(owner1, owner2, points1, points2, winner === t1 ? 1 : 2);
     }
   }
 

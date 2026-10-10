@@ -242,3 +242,68 @@ export function getCurrentPickValue(
 
   return dateValues.get(columnName) ?? null;
 }
+
+// Indexes of all dates ordered by distance from a target timestamp
+function datesByDistance(targetTimestamp: number, dates: string[]): number[] {
+  const closest = findClosestDate(targetTimestamp, dates);
+  if (!closest) return [];
+  const start = dates.indexOf(closest);
+  const order: number[] = [start];
+  const target = new Date(targetTimestamp).getTime();
+  let lo = start - 1;
+  let hi = start + 1;
+  while (lo >= 0 || hi < dates.length) {
+    const dLo = lo >= 0 ? Math.abs(new Date(dates[lo]).getTime() - target) : Infinity;
+    const dHi = hi < dates.length ? Math.abs(new Date(dates[hi]).getTime() - target) : Infinity;
+    if (dLo <= dHi) order.push(lo--);
+    else order.push(hi++);
+  }
+  return order;
+}
+
+// A player's sheet value on the nearest date the sheet tracked him (the
+// exact date may predate his first appearance or follow his last)
+export function getNearestHistoricalPlayerValue(
+  playerId: string,
+  tradeDate: number,
+  historicalData: HistoricalValueData,
+  playerMapping: Map<string, string>
+): number | null {
+  const columnName = playerMapping.get(playerId);
+  if (!columnName) return null;
+  for (const i of datesByDistance(tradeDate, historicalData.dates)) {
+    const value = historicalData.values.get(historicalData.dates[i])?.get(columnName);
+    if (value != null) return value;
+  }
+  return null;
+}
+
+// A pick's value at a date even when the sheet has no column for its
+// exact class then: use the same tier and round of the closest class the
+// sheet was pricing on the nearest date it priced any (a 2023 1st traded
+// in 2022, before the sheet tracked 2023 picks, is priced like a 2024 1st)
+export function getNearestHistoricalPickValue(
+  season: string,
+  round: number,
+  tradeDate: number,
+  historicalData: HistoricalValueData,
+  tier: 'Early' | 'Mid' | 'Late' = 'Mid'
+): number | null {
+  const exact = getHistoricalPickValue(season, round, tradeDate, historicalData, tier);
+  if (exact != null) return exact;
+
+  const suffix = ` ${tier} ${pickRoundLabel(round)}`;
+  const target = parseInt(season, 10);
+  for (const i of datesByDistance(tradeDate, historicalData.dates)) {
+    const row = historicalData.values.get(historicalData.dates[i]);
+    if (!row) continue;
+    let best: { distance: number; value: number } | null = null;
+    row.forEach((value, column) => {
+      if (!column.endsWith(suffix)) return;
+      const distance = Math.abs(parseInt(column, 10) - target);
+      if (!best || distance < best.distance) best = { distance, value };
+    });
+    if (best) return (best as { distance: number; value: number }).value;
+  }
+  return null;
+}

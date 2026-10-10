@@ -1,9 +1,11 @@
-import { SleeperRoster, SleeperUser, SleeperPlayersMap } from '@/lib/types';
+import { SleeperRoster, SleeperUser, SleeperPlayersMap, FantasyCalcSettings } from '@/lib/types';
+import type { TradedPickRecord } from '@/lib/tradeCalculator';
 import { getUserAvatarUrl, getUserByOwnerId } from '@/lib/sleeper';
 import {
   fetchFantasyCalcValues,
   fetchDynastyProcessValues,
   calculatePowerRankings,
+  ownedPickValueByRoster,
   TeamPowerRanking,
 } from '@/lib/rankings';
 import Image from 'next/image';
@@ -12,13 +14,25 @@ interface PowerRankingsProps {
   rosters: SleeperRoster[];
   users: SleeperUser[];
   players: SleeperPlayersMap;
+  // The league's format (superflex, PPR, size), so values match it
+  settings: FantasyCalcSettings;
+  // Future picks that changed hands, for the players + picks total
+  tradedPicks: TradedPickRecord[];
+  draftRounds: number;
 }
 
-export default async function PowerRankings({ rosters, users, players }: PowerRankingsProps) {
+export default async function PowerRankings({
+  rosters,
+  users,
+  players,
+  settings,
+  tradedPicks,
+  draftRounds,
+}: PowerRankingsProps) {
   // Fetch values from both sources in parallel
   const [fcResult, dpValues] = await Promise.all([
-    fetchFantasyCalcValues(),
-    fetchDynastyProcessValues(),
+    fetchFantasyCalcValues(settings),
+    fetchDynastyProcessValues(settings.numQbs),
   ]);
 
   // Extract player values from FantasyCalc result
@@ -37,15 +51,18 @@ export default async function PowerRankings({ rosters, users, players }: PowerRa
     players: r.players,
   }));
 
-  const userData = users.map(u => ({
-    user_id: u.user_id,
-    display_name: u.display_name,
-    username: u.username,
-  }));
+  // FantasyCalc prices future picks too, so its column counts the picks
+  // each team holds; DynastyProcess publishes no pick values
+  const pickValues = ownedPickValueByRoster(
+    rosters.map(r => r.roster_id),
+    tradedPicks,
+    Object.fromEntries(fcResult.pickValues),
+    draftRounds
+  );
 
   // Calculate rankings - FantasyCalc uses Sleeper IDs, DynastyProcess uses player names
-  const fcRankings = calculatePowerRankings(rosterData, userData, fcValues, playerNames, false);
-  const dpRankings = calculatePowerRankings(rosterData, userData, dpValues, playerNames, true);
+  const fcRankings = calculatePowerRankings(rosterData, users, fcValues, playerNames, false, pickValues);
+  const dpRankings = calculatePowerRankings(rosterData, users, dpValues, playerNames, true);
 
   const hasFCData = fcValues.size > 0;
   const hasDPData = dpValues.size > 0;
@@ -151,7 +168,7 @@ export default async function PowerRankings({ rosters, users, players }: PowerRa
           title="FantasyCalc"
           rankings={fcRankings}
           hasData={hasFCData}
-          subtitle="Dynasty trade values"
+          subtitle="Dynasty trade values · players + owned picks"
           linkUrl="https://fantasycalc.com/dynasty-rankings"
           linkText="View Rankings"
         />
@@ -159,7 +176,7 @@ export default async function PowerRankings({ rosters, users, players }: PowerRa
           title="DynastyProcess"
           rankings={dpRankings}
           hasData={hasDPData}
-          subtitle="Aggregated dynasty values"
+          subtitle="Aggregated dynasty values · players only"
           linkUrl="https://dynastyprocess.com/values"
           linkText="View Rankings"
         />

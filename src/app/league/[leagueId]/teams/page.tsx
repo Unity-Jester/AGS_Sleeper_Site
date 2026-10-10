@@ -5,8 +5,9 @@ import {
   getLeagueRosters,
   getAllPlayers,
   getUserAvatarUrl,
+  getTradedPicks,
 } from '@/lib/sleeper';
-import { fetchFantasyCalcValues } from '@/lib/rankings';
+import { fetchFantasyCalcValues, ownedPickValueByRoster } from '@/lib/rankings';
 import { analyzeTeamWindows, TeamWindow, WindowVerdict } from '@/lib/rosterAnalysis';
 import { FantasyCalcSettings } from '@/lib/types';
 import { abbreviateNumber, truncateName } from '@/lib/utils';
@@ -60,6 +61,7 @@ const POSITION_COLORS: Record<string, string> = {
   WR: '#60a5fa',
   TE: '#facc15',
   Other: '#6e6a60',
+  Picks: '#c084fc',
 };
 
 function deriveLeagueSettings(
@@ -178,14 +180,34 @@ export default async function TeamsPage({ params }: LeaguePageProps) {
       league.scoring_settings || {},
       league.total_rosters
     );
-    const { playerValues } = await fetchFantasyCalcValues(settings);
+    const [{ playerValues, pickValues }, tradedPicks] = await Promise.all([
+      fetchFantasyCalcValues(settings),
+      getTradedPicks(leagueId).catch(() => []),
+    ]);
 
+    // Without values every team would read 0 and "retooling"
+    if (playerValues.size === 0) {
+      return (
+        <ErrorState
+          title="Player Values Unavailable"
+          detail="FantasyCalc values couldn't be loaded, so teams can't be valued right now."
+        />
+      );
+    }
+
+    const pickValueByRoster = ownedPickValueByRoster(
+      rosters.map(r => r.roster_id),
+      tradedPicks,
+      Object.fromEntries(pickValues),
+      league.settings.draft_rounds || 4
+    );
     const teams = analyzeTeamWindows(
       rosters,
       users,
       players,
       playerValues,
-      league.roster_positions || []
+      league.roster_positions || [],
+      pickValueByRoster
     );
 
     const maxValue = Math.max(...teams.map(t => t.totalValue), 1);
@@ -205,7 +227,8 @@ export default async function TeamsPage({ params }: LeaguePageProps) {
         <div className="space-y-4">
           {teams.map(team => {
             const meta = VERDICT_META[team.verdict];
-            const starterPct = team.totalValue > 0 ? (team.starterValue / team.totalValue) * 100 : 0;
+            const playerTotal = team.starterValue + team.benchValue;
+            const starterPct = playerTotal > 0 ? (team.starterValue / playerTotal) * 100 : 0;
             return (
               <div key={team.rosterId} className="panel p-4">
                 <div className="flex items-center gap-4 flex-wrap">

@@ -20,18 +20,9 @@ import {
   getHistoricalPickValue,
   getCurrentPlayerValue,
   getCurrentPickValue,
+  getNearestHistoricalPlayerValue,
+  getNearestHistoricalPickValue,
 } from './historicalValues';
-
-// Position baseline values for retired/inactive players (fallback when no historical data)
-const POSITION_BASELINES: Record<string, number> = {
-  QB: 5000,
-  RB: 4000,
-  WR: 5000,
-  TE: 3500,
-  K: 500,
-  DEF: 500,
-  Unknown: 2000,
-};
 
 // Age depreciation factors by position (fallback estimation)
 const AGE_FACTORS: Record<string, { peakAge: number; decayRate: number }> = {
@@ -123,20 +114,13 @@ function estimateHistoricalValue(
   const yearsSinceTrade = (now - tradeDate) / (365.25 * 24 * 60 * 60 * 1000);
 
   const posFactors = AGE_FACTORS[position] || AGE_FACTORS.Unknown;
-  const baseline = POSITION_BASELINES[position] || POSITION_BASELINES.Unknown;
 
+  // Players the sheet never tracked and the market barely values today
+  // (backups, practice-squad QBs) were worth about that then too. A fixed
+  // positional baseline here once valued Tanner McKee like Jaylen Waddle.
+  // Retired stars don't land here: the sheet tracked them while they played.
   if (currentValue < 100) {
-    let historicalValue = baseline;
-    if (ageAtTrade !== null) {
-      const ageFromPeak = ageAtTrade - posFactors.peakAge;
-      if (ageFromPeak > 0) {
-        historicalValue *= Math.max(0.3, 1 - (ageFromPeak * posFactors.decayRate));
-      } else if (ageFromPeak < -3) {
-        historicalValue *= 0.6;
-      }
-    }
-    historicalValue *= Math.max(0.5, 1 - (yearsSinceTrade * 0.05));
-    return Math.round(historicalValue);
+    return Math.round(currentValue);
   }
 
   if (ageAtTrade === null) {
@@ -161,8 +145,8 @@ function estimateHistoricalValue(
 
 function createAssetValue(historical: number, current: number): TradeAssetValue {
   return {
-    historical,
-    current,
+    historical: Math.round(historical),
+    current: Math.round(current),
     average: Math.round((historical + current) / 2),
   };
 }
@@ -220,36 +204,6 @@ function buildPickOwnershipMap(
   return pickOwnership;
 }
 
-function didTeamUsePick(
-  rosterId: number,
-  pick: { season: string; round: number; roster_id: number },
-  tradeId: string,
-  pickOwnershipMap: Map<string, PickOwnershipInfo>,
-  draftMap: Map<string, DraftedPlayer> | null
-): { wasUsed: boolean; draftedPlayer: DraftedPlayer | null } {
-  const tradeKey = `${pick.season}_${pick.round}_${pick.roster_id}_${tradeId}`;
-  const info = pickOwnershipMap.get(tradeKey);
-
-  if (!info) {
-    const draftKey = `${pick.season}_${pick.round}_${pick.roster_id}`;
-    const draftedPlayer = draftMap?.get(draftKey) || null;
-    if (draftedPlayer && draftedPlayer.rosterId === rosterId) {
-      return { wasUsed: true, draftedPlayer };
-    }
-    return { wasUsed: false, draftedPlayer: null };
-  }
-
-  if (info.wasUsedInDraft && info.draftedPlayer?.rosterId === rosterId) {
-    return { wasUsed: true, draftedPlayer: info.draftedPlayer };
-  }
-
-  if (info.tradedAgainBeforeDraft || info.finalOwnerId !== rosterId) {
-    return { wasUsed: false, draftedPlayer: null };
-  }
-
-  return { wasUsed: false, draftedPlayer: null };
-}
-
 // Get player's age at time of trade
 function getAgeAtTrade(player: { age: number | null } | undefined, tradeDate: number): number | null {
   if (!player?.age) return null;
@@ -258,15 +212,18 @@ function getAgeAtTrade(player: { age: number | null } | undefined, tradeDate: nu
   return player.age - yearsSinceTrade;
 }
 
-// Get pick value with historical data support
+// Get pick value with historical data support.
+//
+// At trade time a pick is worth its market price then. Today, once its
+// draft has happened, it's worth whoever it became - no matter which team
+// made the selection. (Picks flipped before the draft used to be valued at
+// 0 today, since no market prices an already-drafted class.)
 function getPickValue(
   pick: { season: string; round: number; roster_id: number },
-  tradeId: string,
   rosterId: number,
   tradeDate: number,
   pickValues: Record<string, number>,
   playerValues: Record<string, number>,
-  pickOwnershipMap: Map<string, PickOwnershipInfo>,
   draftMap: Map<string, DraftedPlayer> | null,
   historicalData: HistoricalValueData | null,
   playerMapping: Map<string, string> | null,
@@ -275,67 +232,35 @@ function getPickValue(
   // FantasyCalc fallbacks are rescaled onto the sheet's value scale
   // whenever sheet data is in play, or mixed-source sums skew the trade
   const scale = historicalData ? fcScale : 1;
-  const { wasUsed, draftedPlayer } = didTeamUsePick(
-    rosterId,
-    pick,
-    tradeId,
-    pickOwnershipMap,
-    draftMap
-  );
 
-  // Get generic pick value (fallback)
+  // Generic FantasyCalc pick value (future classes only)
   const genericPickKey = `${pick.season} ${pickRoundLabel(pick.round)}`;
   const fallbackPickValue = (pickValues[genericPickKey] || 0) * scale;
 
-  if (wasUsed && draftedPlayer) {
-    // Team used the pick - use player's value
-    let historicalValue: number | null = null;
-    let currentValue: number | null = null;
+  const historicalPickValue = historicalData
+    ? getNearestHistoricalPickValue(pick.season, pick.round, tradeDate, historicalData)
+    : null;
+  const finalHistorical = historicalPickValue ?? fallbackPickValue;
 
-    if (historicalData && playerMapping) {
-      historicalValue = getHistoricalPlayerValue(
-        draftedPlayer.playerId,
-        tradeDate,
-        historicalData,
-        playerMapping
-      );
-      currentValue = getCurrentPlayerValue(
-        draftedPlayer.playerId,
-        historicalData,
-        playerMapping
-      );
-    }
-
-    // For picks that became players, historical value should be the pick value at trade time
-    // Current value should be the player's current value
-    const histPickValue = historicalData
-      ? getHistoricalPickValue(pick.season, pick.round, tradeDate, historicalData)
+  const draftedPlayer = draftMap?.get(`${pick.season}_${pick.round}_${pick.roster_id}`) ?? null;
+  if (draftedPlayer) {
+    const sheetCurrent = historicalData && playerMapping
+      ? getCurrentPlayerValue(draftedPlayer.playerId, historicalData, playerMapping)
       : null;
-
-    const finalHistorical = histPickValue ?? fallbackPickValue;
-    const finalCurrent = currentValue ?? (playerValues[draftedPlayer.playerId] ?? 0) * scale;
-
+    const finalCurrent = sheetCurrent ?? (playerValues[draftedPlayer.playerId] ?? 0) * scale;
     return {
       value: createAssetValue(finalHistorical, finalCurrent),
       becamePlayer: draftedPlayer,
-      wasUsedByTeam: true,
+      wasUsedByTeam: draftedPlayer.rosterId === rosterId,
     };
   }
 
-  // Team traded the pick away or it hasn't been used yet - use pick values
-  let historicalPickValue: number | null = null;
-  let currentPickValue: number | null = null;
-
-  if (historicalData) {
-    historicalPickValue = getHistoricalPickValue(pick.season, pick.round, tradeDate, historicalData);
-    currentPickValue = getCurrentPickValue(pick.season, pick.round, historicalData);
-  }
-
-  const finalHistorical = historicalPickValue ?? fallbackPickValue;
-  const finalCurrent = currentPickValue ?? fallbackPickValue;
-
+  // Not drafted yet: today's pick price
+  const currentPickValue = historicalData
+    ? getCurrentPickValue(pick.season, pick.round, historicalData)
+    : null;
   return {
-    value: createAssetValue(finalHistorical, finalCurrent),
+    value: createAssetValue(finalHistorical, currentPickValue ?? fallbackPickValue),
     becamePlayer: null,
     wasUsedByTeam: false,
   };
@@ -383,7 +308,8 @@ export function analyzeTrade(
         let currentValue: number | null = null;
 
         if (historicalData && playerMapping) {
-          historicalValue = getHistoricalPlayerValue(playerId, trade.created, historicalData, playerMapping);
+          historicalValue = getHistoricalPlayerValue(playerId, trade.created, historicalData, playerMapping)
+            ?? getNearestHistoricalPlayerValue(playerId, trade.created, historicalData, playerMapping);
           currentValue = getCurrentPlayerValue(playerId, historicalData, playerMapping);
         }
 
@@ -418,12 +344,10 @@ export function analyzeTrade(
     if (pick.owner_id === rosterId && pick.previous_owner_id !== rosterId) {
       const { value, becamePlayer, wasUsedByTeam } = getPickValue(
         pick,
-        trade.transaction_id,
         rosterId,
         trade.created,
         pickValues,
         playerValues,
-        pickOwnershipMap,
         draftMap,
         historicalData,
         playerMapping,
@@ -469,7 +393,8 @@ export function analyzeTrade(
         let currentValue: number | null = null;
 
         if (historicalData && playerMapping) {
-          historicalValue = getHistoricalPlayerValue(playerId, trade.created, historicalData, playerMapping);
+          historicalValue = getHistoricalPlayerValue(playerId, trade.created, historicalData, playerMapping)
+            ?? getNearestHistoricalPlayerValue(playerId, trade.created, historicalData, playerMapping);
           currentValue = getCurrentPlayerValue(playerId, historicalData, playerMapping);
         }
 
@@ -503,12 +428,10 @@ export function analyzeTrade(
     if (pick.previous_owner_id === rosterId && pick.owner_id !== rosterId) {
       const { value, becamePlayer, wasUsedByTeam } = getPickValue(
         pick,
-        trade.transaction_id,
         pick.owner_id,
         trade.created,
         pickValues,
         playerValues,
-        pickOwnershipMap,
         draftMap,
         historicalData,
         playerMapping,
@@ -728,6 +651,20 @@ export function generateTeamReportCard(
   };
 }
 
+// A trade where some team received only FAAB. FAAB has no market value
+// to set against players and picks, so these can't be graded fairly:
+// selling a 2nd for $380 would read as giving the pick away.
+export function isFaabOnlyTrade(trade: SleeperTransaction): boolean {
+  return trade.roster_ids.some(rosterId => {
+    const gotPlayers = Object.values(trade.adds || {}).some(r => r === rosterId);
+    const gotPicks = (trade.draft_picks || []).some(
+      p => p.owner_id === rosterId && p.previous_owner_id !== rosterId
+    );
+    const gotFaab = (trade.waiver_budget || []).some(b => b.receiver === rosterId && b.amount > 0);
+    return gotFaab && !gotPlayers && !gotPicks;
+  });
+}
+
 // Generate report cards for all teams
 export function generateAllReportCards(
   allTrades: SleeperTransaction[],
@@ -739,17 +676,27 @@ export function generateAllReportCards(
   draftMap: Map<string, DraftedPlayer> | null = null,
   historicalData: HistoricalValueData | null = null,
   playerMapping: Map<string, string> | null = null,
-  fcScale: number = 1
+  fcScale: number = 1,
+  // Who managed each roster when each trade was made (tradeId -> rosterId
+  // -> owner). A card only grades its current manager's trades.
+  ownerAtTrade: Map<string, Map<number, string>> | null = null
 ): TeamReportCard[] {
   const reportCards: TeamReportCard[] = [];
+  const gradable = allTrades.filter(t => !isFaabOnlyTrade(t));
 
   // Built once here; rebuilding per roster is O(teams x trades) of wasted work
-  const pickOwnershipMap = buildPickOwnershipMap(allTrades, draftMap);
+  const pickOwnershipMap = buildPickOwnershipMap(gradable, draftMap);
 
   for (const roster of rosters) {
+    const rosterTrades = ownerAtTrade
+      ? gradable.filter(t => {
+          const owner = ownerAtTrade.get(t.transaction_id)?.get(roster.roster_id);
+          return owner === undefined || owner === roster.owner_id;
+        })
+      : gradable;
     const reportCard = generateTeamReportCard(
       roster.roster_id,
-      allTrades,
+      rosterTrades,
       rosters,
       users,
       players,

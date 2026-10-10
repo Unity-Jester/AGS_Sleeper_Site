@@ -5,6 +5,8 @@ export interface SleeperUser {
   username: string;
   display_name: string;
   avatar: string | null;
+  // League owner flag on /league/{id}/users (commissioners)
+  is_owner?: boolean;
   metadata?: {
     team_name?: string;
     [key: string]: string | undefined;
@@ -54,6 +56,8 @@ export interface LeagueSettings {
   playoff_teams: number;
   playoff_seed_type: number;
   playoff_round_type: number;
+  // 1 = each team also plays the league median every week
+  league_average_match?: number;
   pick_trading: number;
   offseason_adds: number;
   num_teams: number;
@@ -76,6 +80,7 @@ export interface LeagueSettings {
 export interface SleeperRoster {
   roster_id: number;
   owner_id: string;
+  co_owners?: string[] | null;
   league_id: string;
   starters: string[];
   players: string[];
@@ -120,6 +125,8 @@ export interface SleeperTransaction {
   waiver_budget: WaiverBudget[];
   settings: TransactionSettings | null;
   created: number;
+  // When the transaction processed (waivers run after they're claimed)
+  status_updated?: number;
   creator: string;
   consenter_ids: number[];
   leg: number;

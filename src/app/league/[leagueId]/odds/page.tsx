@@ -3,13 +3,20 @@ import {
   getLeague,
   getLeagueUsers,
   getLeagueRosters,
-  getAllPlayers,
   getSeasonWeeklyMatchups,
+  getPlayoffBracket,
   getUserByOwnerId,
   getUserAvatarUrl,
 } from '@/lib/sleeper';
 import { fetchFantasyCalcValues } from '@/lib/rankings';
-import { estimateScoringModels, simulateSeason } from '@/lib/simulation';
+import { estimateScoringModels, simulateSeason, playoffByes } from '@/lib/simulation';
+import {
+  hasMedianGames,
+  lastRegularSeasonWeek,
+  playoffRoundCount,
+  playoffRoundWeeks,
+  scoredThroughWeek,
+} from '@/lib/leagueWeeks';
 import { FantasyCalcSettings, SleeperMatchup } from '@/lib/types';
 import { getTeamName } from '@/lib/utils';
 import ErrorState from '@/components/ErrorState';
@@ -72,11 +79,10 @@ export default async function OddsPage({ params }: LeaguePageProps) {
   const { leagueId } = params;
 
   try {
-    const [league, users, rosters, players] = await Promise.all([
+    const [league, users, rosters] = await Promise.all([
       getLeague(leagueId),
       getLeagueUsers(leagueId),
       getLeagueRosters(leagueId),
-      getAllPlayers(),
     ]);
 
     if (league.status === 'pre_draft' || league.status === 'drafting') {
@@ -101,12 +107,19 @@ export default async function OddsPage({ params }: LeaguePageProps) {
       );
     }
 
-    const regularSeasonWeeks = Math.max(1, (league.settings.playoff_week_start || 15) - 1);
-    const [weeklyMatchups, { playerValues }] = await Promise.all([
+    // Weeks Sleeper has finished scoring. The week in progress isn't in
+    // anyone's record yet, so it's simulated like any other remaining week
+    // and its partial scores stay out of the scoring model.
+    const regularSeasonWeeks = Math.max(1, lastRegularSeasonWeek(league.settings));
+    const weeksPlayed = Math.min(scoredThroughWeek(league), regularSeasonWeeks);
+    const seedsSet = weeksPlayed >= regularSeasonWeeks;
+    const [weeklyMatchups, { playerValues }, bracket] = await Promise.all([
       getSeasonWeeklyMatchups(leagueId, regularSeasonWeeks),
       fetchFantasyCalcValues(
         deriveLeagueSettings(league.roster_positions || [], league.scoring_settings || {}, league.total_rosters)
       ),
+      // Once seeding is final, play out the league's real bracket
+      seedsSet ? getPlayoffBracket(leagueId).catch(() => []) : Promise.resolve([]),
     ]);
 
     // Roster values feed the preseason scoring prior
@@ -117,11 +130,10 @@ export default async function OddsPage({ params }: LeaguePageProps) {
       rosterValues.set(roster.roster_id, total);
     }
 
-    const models = estimateScoringModels(weeklyMatchups, rosterValues);
+    const models = estimateScoringModels(weeklyMatchups.slice(0, weeksPlayed), rosterValues);
 
-    // Remaining = scheduled weeks nobody has scored in yet
     const remainingWeeks = weeklyMatchups
-      .filter(week => week.length > 0 && !week.some(m => (m.points || 0) > 0))
+      .slice(weeksPlayed)
       .map(pairWeek)
       .filter(pairs => pairs.length > 0);
 
@@ -138,7 +150,11 @@ export default async function OddsPage({ params }: LeaguePageProps) {
     }
 
     const playoffTeams = league.settings.playoff_teams || 6;
-    const weeksPlayed = weeklyMatchups.filter(w => w.some(m => (m.points || 0) > 0)).length;
+    const medianGames = hasMedianGames(league.settings);
+    const roundLengths = Array.from(
+      { length: playoffRoundCount(league.settings) },
+      (_, i) => playoffRoundWeeks(league.settings, i + 1).length || 1
+    );
 
     const odds = simulateSeason({
       models,
@@ -150,19 +166,24 @@ export default async function OddsPage({ params }: LeaguePageProps) {
       })),
       remainingWeeks,
       playoffTeams,
+      medianGames,
+      roundLengths,
+      bracket: bracket.some(g => g.t1 || g.team_1_roster_id) ? bracket : undefined,
       sims: SIMS,
       seed: seedFrom(leagueId, weeksPlayed),
     });
 
-    const hasByes = playoffTeams >= 6;
+    const hasByes = playoffByes(playoffTeams) > 0;
 
     return (
       <div className="space-y-8">
         <div>
           <h1 className="text-3xl text-white">Playoff Odds</h1>
           <p className="text-gray-400 mt-1">
-            {league.name} &middot; {playoffTeams}-team playoff &middot; {remainingWeeks.length} week
-            {remainingWeeks.length !== 1 ? 's' : ''} remaining
+            {league.name} &middot; {playoffTeams}-team playoff &middot;{' '}
+            {seedsSet
+              ? 'regular season complete'
+              : `${remainingWeeks.length} week${remainingWeeks.length !== 1 ? 's' : ''} remaining`}
           </p>
         </div>
 
@@ -241,7 +262,10 @@ export default async function OddsPage({ params }: LeaguePageProps) {
         <p className="text-xs text-gray-600">
           {SIMS.toLocaleString()} Monte Carlo simulations of the remaining schedule. Weekly
           scoring is modeled from each team&apos;s {weeksPlayed > 0 ? `${weeksPlayed} played week${weeksPlayed !== 1 ? 's' : ''} blended with ` : ''}
-          roster-value priors; the playoff bracket is simulated single-elimination by seed.
+          roster-value priors{medianGames ? '; each week also awards a win to the top half of scores (median games)' : ''}.
+          {seedsSet
+            ? ' Title odds play out the remaining games of the real playoff bracket.'
+            : " The playoff bracket is Sleeper's fixed bracket by seed."}{' '}
           Division tiebreakers are approximated by overall record and points.
         </p>
       </div>

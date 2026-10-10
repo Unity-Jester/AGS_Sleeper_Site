@@ -1,4 +1,8 @@
 import { getLeague, getLeagueUsers } from '@/lib/sleeper';
+import { hasMedianGames } from '@/lib/leagueWeeks';
+import { scoringGroup, scoringLabel, scoringValue, ScoringGroup } from '@/lib/scoringLabels';
+
+const SCORING_GROUP_ORDER: ScoringGroup[] = ['Passing', 'Rushing', 'Receiving', 'Kicking', 'Defense', 'Special Teams', 'Other'];
 
 export const revalidate = 3600; // Revalidate every hour
 
@@ -15,8 +19,26 @@ export default async function SettingsPage({ params }: LeaguePageProps) {
       getLeagueUsers(leagueId),
     ]);
 
-    // Find commissioner
-    const commissioner = users.find(u => u.user_id === league.settings?.commissioner_direct_invite?.toString());
+    // Commissioners are the users Sleeper flags as league owners
+    const commissioners = users
+      .filter(u => u.is_owner)
+      .map(u => (u.metadata?.team_name ? `${u.display_name} (${u.metadata.team_name})` : u.display_name));
+    const settings = league.settings;
+    // Sleeper stores "no deadline" as week 99
+    const tradeDeadline = !settings.trade_deadline || settings.trade_deadline > 18 ? 'None' : `Week ${settings.trade_deadline}`;
+    const playoffFormat =
+      settings.playoff_round_type === 1 ? 'Two-week championship'
+        : settings.playoff_round_type === 2 ? 'Two weeks per round'
+          : 'One week per round';
+
+    // Scoring grouped by phase of the game
+    const scoringGroups = new Map<ScoringGroup, [string, number][]>();
+    for (const [key, value] of Object.entries(league.scoring_settings)) {
+      if (value === 0) continue;
+      const group = scoringGroup(key);
+      if (!scoringGroups.has(group)) scoringGroups.set(group, []);
+      scoringGroups.get(group)!.push([key, value]);
+    }
 
     return (
       <div className="space-y-8">
@@ -49,9 +71,16 @@ export default async function SettingsPage({ params }: LeaguePageProps) {
               <div className="flex justify-between">
                 <dt className="text-gray-400">League Type</dt>
                 <dd className="text-white">
-                  {league.settings.type === 0 ? 'Redraft' : league.settings.type === 1 ? 'Keeper' : 'Dynasty'}
+                  {league.settings.type === 0 ? 'Redraft' : league.settings.type === 1 ? 'Keeper' : league.settings.type === 2 ? 'Dynasty' : 'Guillotine'}
+                  {settings.best_ball ? ' · Best ball' : ''}
                 </dd>
               </div>
+              {commissioners.length > 0 && (
+                <div className="flex justify-between gap-4">
+                  <dt className="text-gray-400">Commissioner{commissioners.length > 1 ? 's' : ''}</dt>
+                  <dd className="text-white text-right">{commissioners.join(', ')}</dd>
+                </div>
+              )}
             </dl>
           </div>
 
@@ -68,10 +97,18 @@ export default async function SettingsPage({ params }: LeaguePageProps) {
                 <dd className="text-white">Week {league.settings.playoff_week_start}</dd>
               </div>
               <div className="flex justify-between">
-                <dt className="text-gray-400">Trade Deadline</dt>
+                <dt className="text-gray-400">Playoff Format</dt>
+                <dd className="text-white">{playoffFormat}</dd>
+              </div>
+              <div className="flex justify-between">
+                <dt className="text-gray-400">Median Game</dt>
                 <dd className="text-white">
-                  {league.settings.trade_deadline === 0 ? 'None' : `Week ${league.settings.trade_deadline}`}
+                  {hasMedianGames(settings) ? 'Yes · extra win for a top-half score each week' : 'No'}
                 </dd>
+              </div>
+              <div className="flex justify-between">
+                <dt className="text-gray-400">Trade Deadline</dt>
+                <dd className="text-white">{tradeDeadline}</dd>
               </div>
               <div className="flex justify-between">
                 <dt className="text-gray-400">Divisions</dt>
@@ -176,16 +213,20 @@ export default async function SettingsPage({ params }: LeaguePageProps) {
         {/* Scoring Settings */}
         <div className="panel p-6">
           <h2 className="text-lg font-semibold text-white mb-4">Scoring</h2>
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 text-sm">
-            {Object.entries(league.scoring_settings)
-              .filter(([, value]) => value !== 0)
-              .sort(([a], [b]) => a.localeCompare(b))
-              .map(([key, value]) => (
-                <div key={key} className="flex justify-between gap-2">
-                  <span className="text-gray-400 truncate">{formatScoringKey(key)}</span>
-                  <span className="text-white font-medium">{value}</span>
-                </div>
-              ))}
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 text-sm">
+            {SCORING_GROUP_ORDER.filter(g => scoringGroups.has(g)).map(group => (
+              <div key={group}>
+                <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-2">{group}</h3>
+                <dl className="space-y-1.5">
+                  {scoringGroups.get(group)!.map(([key, value]) => (
+                    <div key={key} className="flex justify-between gap-2">
+                      <dt className="text-gray-400 truncate">{scoringLabel(key)}</dt>
+                      <dd className="text-white font-medium tabular-nums whitespace-nowrap">{scoringValue(key, value)}</dd>
+                    </div>
+                  ))}
+                </dl>
+              </div>
+            ))}
           </div>
         </div>
       </div>
@@ -198,17 +239,4 @@ export default async function SettingsPage({ params }: LeaguePageProps) {
       </div>
     );
   }
-}
-
-function formatScoringKey(key: string): string {
-  return key
-    .replace(/_/g, ' ')
-    .replace(/\b\w/g, c => c.toUpperCase())
-    .replace('Rec', 'Reception')
-    .replace('Yds', 'Yards')
-    .replace('Td', 'TD')
-    .replace('Qb', 'QB')
-    .replace('Rb', 'RB')
-    .replace('Wr', 'WR')
-    .replace('Te', 'TE');
 }

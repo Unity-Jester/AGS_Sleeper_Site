@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { estimateScoringModels, simulateSeason, TeamScoringModel } from '../simulation';
+import { estimateScoringModels, simulateSeason, TeamScoringModel, bracketSlots, playoffByes } from '../simulation';
 import { SleeperMatchup } from '../types';
 
 function m(rosterId: number, matchupId: number, points: number): SleeperMatchup {
@@ -128,5 +128,73 @@ describe('simulateSeason', () => {
     expect(byId.get(1)!.byePct).toBeGreaterThan(byId.get(8)!.byePct);
     expect(byId.get(1)!.avgSeed).not.toBeNull();
     expect(byId.get(1)!.avgSeed!).toBeLessThan(3);
+  });
+});
+
+describe('playoff bracket', () => {
+  it("lays out Sleeper's fixed bracket", () => {
+    expect(bracketSlots(4)).toEqual([1, 4, 2, 3]);
+    expect(bracketSlots(8)).toEqual([1, 8, 4, 5, 2, 7, 3, 6]);
+    expect(playoffByes(6)).toBe(2);
+    expect(playoffByes(8)).toBe(0);
+    expect(playoffByes(4)).toBe(0);
+  });
+
+  it('gives the top two seeds of a 6-team field the byes', () => {
+    // Identical teams: seeds 1-2 need two wins (25%), seeds 3-6 three (12.5%)
+    const ids = [1, 2, 3, 4, 5, 6];
+    const odds = simulateSeason({
+      models: new Map(ids.map(id => [id, model(id, 110, 20)])),
+      standings: ids.map(id => ({ rosterId: id, wins: 10 - id, ties: 0, pointsFor: 1000 })),
+      remainingWeeks: [],
+      playoffTeams: 6,
+      sims: 20000,
+      seed: 11,
+    });
+    const byId = new Map(odds.map(o => [o.rosterId, o]));
+    expect(byId.get(1)!.titlePct).toBeCloseTo(25, -0.5);
+    expect(byId.get(2)!.titlePct).toBeCloseTo(25, -0.5);
+    expect(byId.get(6)!.titlePct).toBeCloseTo(12.5, -0.5);
+    expect(byId.get(1)!.byePct).toBe(100);
+    expect(byId.get(3)!.byePct).toBe(0);
+  });
+
+  it('keeps decided bracket games and simulates the rest', () => {
+    const ids = [1, 2, 3, 4];
+    const odds = simulateSeason({
+      models: new Map(ids.map(id => [id, model(id, 110, 20)])),
+      standings: ids.map(id => ({ rosterId: id, wins: 10 - id, ties: 0, pointsFor: 1000 })),
+      remainingWeeks: [],
+      playoffTeams: 4,
+      bracket: [
+        { m: 1, r: 1, t1: 1, t2: 4, w: 4, l: 1 },
+        { m: 2, r: 1, t1: 2, t2: 3, w: 2, l: 3 },
+        { m: 3, r: 2, p: 1, t1: null, t2: null, team_1_from: { w: 1 }, team_2_from: { w: 2 } },
+      ],
+      sims: 2000,
+      seed: 5,
+    });
+    const byId = new Map(odds.map(o => [o.rosterId, o]));
+    expect(byId.get(1)!.titlePct).toBe(0);
+    expect(byId.get(3)!.titlePct).toBe(0);
+    expect(byId.get(4)!.titlePct + byId.get(2)!.titlePct).toBeCloseTo(100, 5);
+  });
+});
+
+describe('median games', () => {
+  it('adds a median win for half the league every week', () => {
+    const ids = [1, 2, 3, 4];
+    const odds = simulateSeason({
+      models: new Map(ids.map(id => [id, model(id, 110, 20)])),
+      standings: ids.map(id => ({ rosterId: id, wins: 0, ties: 0, pointsFor: 0 })),
+      remainingWeeks: Array.from({ length: 5 }, () => [[1, 2], [3, 4]] as [number, number][]),
+      playoffTeams: 2,
+      medianGames: true,
+      sims: 200,
+      seed: 9,
+    });
+    // 5 weeks x (2 head-to-head + 2 median) wins
+    const totalWins = odds.reduce((s, o) => s + o.projectedWins, 0);
+    expect(totalWins).toBeCloseTo(20, 5);
   });
 });

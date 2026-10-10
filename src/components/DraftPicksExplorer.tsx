@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import Image from 'next/image';
 import { cn, getPositionTextColor, ordinalSuffix } from '@/lib/utils';
-import { DraftGrade, gradeDraftValue } from '@/lib/draftValues';
+import { DraftGrade, gradeDraftPicks } from '@/lib/draftValues';
 
 export interface ExplorerManager {
   ownerId: string;
@@ -26,9 +26,12 @@ export interface ExplorerPick {
   playerId: string;
   playerName: string;
   position: string;
-  pickValue: number;
+  // What this slot typically produced in the same draft class
+  expectedValue: number;
   currentValue: number;
   valueDiff: number;
+  // The draft class's typical miss from expected
+  sigma: number;
 }
 
 const STORAGE_KEY = 'draftExplorerOwner';
@@ -130,9 +133,7 @@ export default function DraftPicksExplorer({
     return { drafts, scored: mine.filter(p => !p.isStartup) };
   }, [picks, ownerId]);
 
-  const totalPick = scored.reduce((s, p) => s + p.pickValue, 0);
-  const totalCurrent = scored.reduce((s, p) => s + p.currentValue, 0);
-  const totalDiff = totalCurrent - totalPick;
+  const totalDiff = scored.reduce((s, p) => s + p.valueDiff, 0);
 
   if (managers.length === 0) return null;
 
@@ -141,7 +142,7 @@ export default function DraftPicksExplorer({
       <div className="px-4 py-3 border-b border-white/[0.06] flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div>
           <h2 className="text-lg font-semibold text-white">Draft Picks &amp; Grades</h2>
-          <p className="text-sm text-gray-400">Every pick a manager has made, graded on value now vs. pick cost</p>
+          <p className="text-sm text-gray-400">Every pick a manager has made, graded against what that draft slot typically produced</p>
         </div>
         <select
           value={ownerId}
@@ -171,11 +172,9 @@ export default function DraftPicksExplorer({
             <>
               <div className="text-right">
                 <p className={`text-lg font-bold ${getValueColor(totalDiff)}`}>{formatDiff(totalDiff)}</p>
-                <p className="text-xs text-gray-500">
-                  {formatValue(totalPick)} → {formatValue(totalCurrent)}
-                </p>
+                <p className="text-xs text-gray-500">Value over expected</p>
               </div>
-              <GradeBadge grade={gradeDraftValue(totalPick, totalCurrent)} large />
+              <GradeBadge grade={gradeDraftPicks(scored)} large />
             </>
           )}
         </div>
@@ -188,8 +187,7 @@ export default function DraftPicksExplorer({
       <div className="divide-y divide-white/[0.06]">
         {drafts.map(list => {
           const first = list[0];
-          const dPick = list.reduce((s, p) => s + p.pickValue, 0);
-          const dCurrent = list.reduce((s, p) => s + p.currentValue, 0);
+          const dDiff = list.reduce((s, p) => s + p.valueDiff, 0);
           return (
             <div key={first.draftId}>
               <div className="px-4 py-2 bg-gray-800/30 flex items-center justify-between">
@@ -201,10 +199,10 @@ export default function DraftPicksExplorer({
                 </p>
                 {!first.isStartup && (
                   <div className="flex items-center gap-3">
-                    <span className={`text-sm font-medium ${getValueColor(dCurrent - dPick)}`}>
-                      {formatDiff(dCurrent - dPick)}
+                    <span className={`text-sm font-medium ${getValueColor(dDiff)}`}>
+                      {formatDiff(dDiff)}
                     </span>
-                    <GradeBadge grade={gradeDraftValue(dPick, dCurrent)} />
+                    <GradeBadge grade={gradeDraftPicks(list)} />
                   </div>
                 )}
               </div>
@@ -234,13 +232,13 @@ export default function DraftPicksExplorer({
                     <div className="text-right">
                       <p className={`text-sm font-medium ${getValueColor(p.valueDiff)}`}>{formatDiff(p.valueDiff)}</p>
                       <p className="text-xs text-gray-500">
-                        {formatValue(p.pickValue)} → {formatValue(p.currentValue)}
+                        Slot {formatValue(p.expectedValue)} → {formatValue(p.currentValue)}
                       </p>
                     </div>
                     {p.isStartup ? (
                       <span className="w-9 text-center text-xs text-gray-600">—</span>
                     ) : (
-                      <GradeBadge grade={gradeDraftValue(p.pickValue, p.currentValue)} />
+                      <GradeBadge grade={gradeDraftPicks([p])} />
                     )}
                   </div>
                 ))}

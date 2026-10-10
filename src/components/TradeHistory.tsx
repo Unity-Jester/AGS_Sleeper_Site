@@ -17,9 +17,10 @@ interface TradeHistoryProps {
   players: SleeperPlayersMap;
   currentSeason: string;
   tradeValues?: TradeValueMap;
+  draftedPicks?: Record<string, string>;
 }
 
-export default function TradeHistory({ seasonTrades, players, currentSeason, tradeValues }: TradeHistoryProps) {
+export default function TradeHistory({ seasonTrades, players, currentSeason, tradeValues, draftedPicks }: TradeHistoryProps) {
   // Current season is expanded by default
   const [expandedSeasons, setExpandedSeasons] = useState<Set<string>>(new Set([currentSeason]));
   const [searchTerm, setSearchTerm] = useState('');
@@ -171,6 +172,7 @@ export default function TradeHistory({ seasonTrades, players, currentSeason, tra
                         users={users}
                         players={players}
                         tradeValues={tradeValues?.[trade.transaction_id]}
+                        draftedPicks={draftedPicks}
                       />
                     ))
                   ) : (

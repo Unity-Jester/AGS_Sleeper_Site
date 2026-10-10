@@ -61,7 +61,7 @@ export default function TradeAnalyzer({
     createEmptySide(),
   ]);
 
-  const pickOptions = getDraftPickOptions();
+  const pickOptions = useMemo(() => getDraftPickOptions(pickValues), [pickValues]);
 
   // Build team list for dropdowns
   const teamOptions = useMemo(() => {
@@ -204,35 +204,21 @@ export default function TradeAnalyzer({
       return sortedTeams.findIndex(([id]) => id === rosterId) + 1;
     };
 
-    // For each team, calculate what they gain and lose
-    // In a multi-team trade, each team receives the assets on their side
-    // and gives up assets to be distributed to other teams
-
-    // Calculate net value change for each team
-    // Team at sideIndex receives sideTotals[sideIndex] and gives up sum of other sides' totals / (numTeams - 1)
-    // Actually, in multi-team trades it's simpler: each team receives what's in their column
-    // The total value coming to them minus total value going from them
-
-    // Simpler model: assume the trade is balanced where each team ends up with their side's value
-    // The value change is: what they receive (their side total) - their proportional contribution to other sides
-    // For simplicity, we'll calculate based on the idea that the "give" side is distributed
-
-    // Actually, let's think about this differently:
-    // In a 2-team trade: Team A receives side1 and gives up side2, Team B receives side2 and gives up side1
-    // In a 3-team trade: Each team receives their side's assets
-    // The value change for each team is: sideTotal[their side] - (sum of other sides / numOtherTeams * their share)
-    // This gets complicated. Let's use a simpler model:
-    // Value change = their side's total - average of all sides (what a "fair" contribution would be)
-
+    // Each team receives the assets in its column and gives up what the
+    // other columns receive. Two teams: A's change is A - B exactly. With
+    // three, who sends what to whom isn't recorded, so each team is assumed
+    // to fund the other columns evenly: received - (others' total) / (n - 1).
+    // Changes still sum to zero across the trade.
     const numTeams = teamsWithAssets.length;
     const totalValue = teamsWithAssets.reduce((sum, t) => sum + sideTotals[t.sideIndex], 0);
-    const avgValue = totalValue / numTeams;
+    const netChange = (sideIndex: number) =>
+      sideTotals[sideIndex] - (totalValue - sideTotals[sideIndex]) / (numTeams - 1);
 
     // Create new values map with trade impact
     const newTeamValues = new Map(teamValues);
     for (const { sideIndex, teamId } of teamsWithAssets) {
       const currentValue = teamValues.get(teamId) || 0;
-      const valueChange = sideTotals[sideIndex] - avgValue;
+      const valueChange = netChange(sideIndex);
       newTeamValues.set(teamId, currentValue + valueChange);
     }
 
@@ -252,7 +238,7 @@ export default function TradeAnalyzer({
         oldRank,
         newRank,
         rankChange: oldRank - newRank,
-        valueChange: sideTotals[sideIndex] - avgValue,
+        valueChange: netChange(sideIndex),
       };
     });
   }, [sides, sideTotals, populatedSideIndices, rosters, playerValues, teamOptions]);

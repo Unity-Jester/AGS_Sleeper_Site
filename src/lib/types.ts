@@ -5,6 +5,8 @@ export interface SleeperUser {
   username: string;
   display_name: string;
   avatar: string | null;
+  // League owner flag on /league/{id}/users (commissioners)
+  is_owner?: boolean;
   metadata?: {
     team_name?: string;
     [key: string]: string | undefined;

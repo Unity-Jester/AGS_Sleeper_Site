@@ -4,7 +4,6 @@ import {
   getLeagueRosters,
   getLeagueDrafts,
   getDraftPicks,
-  getAllPlayers,
   getUserByOwnerId,
   getUserAvatarUrl,
   getPlayerAvatarUrl,
@@ -106,7 +105,7 @@ async function getAllDraftData(currentLeagueId: string): Promise<SeasonDraftData
 
   // Every player is valued on the current league's FantasyCalc market so
   // all picks share one scale
-  const [{ playerValues }, players, chainTransactions] = await Promise.all([
+  const [{ playerValues }, chainTransactions] = await Promise.all([
     fetchFantasyCalcValues(
       deriveLeagueSettings(
         currentLeague.roster_positions || [],
@@ -114,14 +113,14 @@ async function getAllDraftData(currentLeagueId: string): Promise<SeasonDraftData
         currentLeague.total_rosters
       )
     ),
-    getAllPlayers(),
     // Every season's moves, to credit picks the draft board misattributes
     Promise.all(
       leagueChain.map(l => getAllSeasonTransactions(l.league_id).catch(() => []))
     ).then(seasons => seasons.flat()),
   ]);
 
-  for (const league of leagueChain) {
+  // Seasons and their drafts load concurrently
+  await Promise.all(leagueChain.map(async league => {
     try {
       const [drafts, users, rosters] = await Promise.all([
         getLeagueDrafts(league.league_id),
@@ -129,8 +128,8 @@ async function getAllDraftData(currentLeagueId: string): Promise<SeasonDraftData
         getLeagueRosters(league.league_id),
       ]);
 
-      for (const draft of drafts) {
-        if (draft.status !== 'complete') continue;
+      await Promise.all(drafts.map(async draft => {
+        if (draft.status !== 'complete') return;
 
         try {
           // Sleeper's board can credit a pick to the slot's former owner
@@ -168,10 +167,10 @@ async function getAllDraftData(currentLeagueId: string): Promise<SeasonDraftData
           );
 
           const picksWithValues: DraftPickWithValue[] = picks.map((pick, i) => {
-            const player = players[pick.player_id];
+            // Picks carry the player's name, so the 20MB players list isn't needed
             const playerName = pick.metadata?.first_name && pick.metadata?.last_name
               ? `${pick.metadata.first_name} ${pick.metadata.last_name}`
-              : player?.full_name || pick.player_id;
+              : pick.player_id;
 
             return {
               ...pick,
@@ -241,11 +240,11 @@ async function getAllDraftData(currentLeagueId: string): Promise<SeasonDraftData
         } catch {
           // Skip drafts without picks
         }
-      }
+      }));
     } catch {
       // Skip inaccessible leagues
     }
-  }
+  }));
 
   const startupId = findStartupDraftId(allDraftData.map(d => d.draft));
   for (const d of allDraftData) {
@@ -393,10 +392,10 @@ function getAllPicksWithSeason(draftData: SeasonDraftData[]): OverallPickWithSea
 }
 
 function formatValue(value: number): string {
-  if (value >= 1000) {
-    return (value / 1000).toFixed(1) + 'K';
-  }
-  return value.toString();
+  const abs = Math.abs(value);
+  const sign = value < 0 ? '-' : '';
+  if (abs >= 1000) return sign + (abs / 1000).toFixed(1) + 'K';
+  return sign + Math.round(abs).toString();
 }
 
 function getValueColor(diff: number): string {

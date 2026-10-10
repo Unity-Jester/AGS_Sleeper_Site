@@ -22,6 +22,9 @@ interface SeasonData {
   users: SleeperUser[];
   rosters: SleeperRoster[];
   champion: { user: SleeperUser | null; roster: SleeperRoster } | null;
+  runnerUp: { user: SleeperUser | null; roster: SleeperRoster } | null;
+  // Final placement by roster from the winners bracket (1st through 6th)
+  finishes: Map<number, number>;
 }
 
 async function getSeasonData(leagueId: string): Promise<SeasonData | null> {
@@ -34,6 +37,12 @@ async function getSeasonData(leagueId: string): Promise<SeasonData | null> {
 
     // Try to find the champion from playoff bracket
     let champion: { user: SleeperUser | null; roster: SleeperRoster } | null = null;
+    let runnerUp: { user: SleeperUser | null; roster: SleeperRoster } | null = null;
+    const finishes = new Map<number, number>();
+    const teamFor = (rosterId: number | null | undefined) => {
+      const roster = rosters.find(r => r.roster_id === rosterId);
+      return roster ? { user: getUserByOwnerId(users, roster.owner_id), roster } : null;
+    };
 
     // Check if season is complete (Sleeper uses 'complete' or check if it's a past season)
     const currentYear = new Date().getFullYear();
@@ -54,15 +63,17 @@ async function getSeasonData(leagueId: string): Promise<SeasonData | null> {
             }, bracket[0]);
 
           const winnerId = championshipMatch?.w ?? championshipMatch?.winner_roster_id;
+          const loserId = championshipMatch?.l ?? championshipMatch?.loser_roster_id;
+          champion = teamFor(winnerId);
+          runnerUp = teamFor(loserId);
 
-          if (winnerId) {
-            const winnerRoster = rosters.find(r => r.roster_id === winnerId);
-            if (winnerRoster) {
-              champion = {
-                user: getUserByOwnerId(users, winnerRoster.owner_id),
-                roster: winnerRoster,
-              };
-            }
+          // Placement games decide places p and p+1
+          for (const game of bracket) {
+            const w = game.w ?? game.winner_roster_id;
+            const l = game.l ?? game.loser_roster_id;
+            if (!game.p || !w || !l) continue;
+            finishes.set(w, game.p);
+            finishes.set(l, game.p + 1);
           }
         }
       } catch (error) {
@@ -70,7 +81,7 @@ async function getSeasonData(leagueId: string): Promise<SeasonData | null> {
       }
     }
 
-    return { league, users, rosters, champion };
+    return { league, users, rosters, champion, runnerUp, finishes };
   } catch {
     return null;
   }
@@ -144,12 +155,16 @@ export default async function HistoryPage({ params }: LeaguePageProps) {
                       />
                       <div className="flex-1">
                         <p className="text-lg font-semibold text-sleeper-accent">
-                          {season.champion!.user?.display_name ||
-                           season.champion!.user?.username ||
-                           `Team ${season.champion!.roster.roster_id}`}
+                          {getTeamName(season.champion!.user, season.champion!.roster.roster_id)}
                         </p>
                         <p className="text-sm text-gray-400">
                           {season.league.season} Season Champion
+                          {season.runnerUp && (
+                            <>
+                              {' '}&middot; def.{' '}
+                              {getTeamName(season.runnerUp.user, season.runnerUp.roster.roster_id)}
+                            </>
+                          )}
                         </p>
                       </div>
                       <div className="text-right">
@@ -192,20 +207,24 @@ export default async function HistoryPage({ params }: LeaguePageProps) {
             </div>
           </div>
 
-          {/* Most Wins (Season) */}
+          {/* Best Record (Season) - by win %, since median-game seasons play
+              twice as many games */}
           <div className="panel overflow-hidden">
             <div className="px-4 py-3 border-b border-white/[0.06]">
-              <h2 className="text-lg font-semibold text-white">Most Wins (Season)</h2>
+              <h2 className="text-lg font-semibold text-white">Best Record (Season)</h2>
             </div>
             <div className="p-4 space-y-2">
-              {allTimeRecords.mostWinsSeason.slice(0, 5).map((record, idx) => (
+              {allTimeRecords.bestRecordSeason.slice(0, 5).map((record, idx) => (
                 <div
                   key={`${record.season}-${record.rosterId}`}
                   className="flex items-center gap-3 p-2 bg-gray-800/30 rounded"
                 >
                   <span className="text-sm text-gray-500 w-6">{ordinalSuffix(idx + 1)}</span>
                   <span className="flex-1 text-white">{record.teamName}</span>
-                  <span className="text-sleeper-green font-medium">{record.wins}-{record.losses}</span>
+                  <span className="text-sleeper-green font-medium">
+                    {record.wins}-{record.losses}{record.ties > 0 ? `-${record.ties}` : ''}
+                  </span>
+                  <span className="text-xs text-gray-400 tabular-nums">{(record.winPct * 100).toFixed(0)}%</span>
                   <span className="text-xs text-gray-500">{record.season}</span>
                 </div>
               ))}
@@ -223,6 +242,7 @@ export default async function HistoryPage({ params }: LeaguePageProps) {
           </div>
           <div className="divide-y divide-white/[0.05]">
             {seasonsData.map((season) => {
+              const hasTies = season.rosters.some(r => (r.settings.ties || 0) > 0);
               const sortedRosters = [...season.rosters].sort((a, b) => {
                 const winsDiff = (b.settings.wins || 0) - (a.settings.wins || 0);
                 if (winsDiff !== 0) return winsDiff;
@@ -254,6 +274,8 @@ export default async function HistoryPage({ params }: LeaguePageProps) {
                           <th className="pb-2 pr-4">Team</th>
                           <th className="pb-2 pr-4 text-center">W</th>
                           <th className="pb-2 pr-4 text-center">L</th>
+                          {hasTies && <th className="pb-2 pr-4 text-center">T</th>}
+                          <th className="pb-2 pr-4 text-center">Finish</th>
                           <th className="pb-2 text-right">PF</th>
                         </tr>
                       </thead>
@@ -271,6 +293,16 @@ export default async function HistoryPage({ params }: LeaguePageProps) {
                               </td>
                               <td className="py-1 pr-4 text-center text-sleeper-red">
                                 {roster.settings.losses || 0}
+                              </td>
+                              {hasTies && (
+                                <td className="py-1 pr-4 text-center text-gray-400">{roster.settings.ties || 0}</td>
+                              )}
+                              <td className="py-1 pr-4 text-center">
+                                {season.finishes.get(roster.roster_id) === 1
+                                  ? '🏆'
+                                  : season.finishes.has(roster.roster_id)
+                                    ? <span className="text-gray-400">{ordinalSuffix(season.finishes.get(roster.roster_id)!)}</span>
+                                    : <span className="text-gray-700">—</span>}
                               </td>
                               <td className="py-1 text-right">
                                 {formatPoints(roster.settings.fpts || 0, roster.settings.fpts_decimal)}
@@ -301,12 +333,15 @@ interface SeasonRecord {
   points: number;
   wins: number;
   losses: number;
+  ties: number;
+  winPct: number;
 }
 
 function calculateAllTimeRecords(seasonsData: SeasonData[]) {
   const allRecords: SeasonRecord[] = [];
 
-  for (const season of seasonsData) {
+  // Season records only count finished seasons
+  for (const season of seasonsData.filter(s => s.league.status === 'complete')) {
     for (const roster of season.rosters) {
       const user = getUserByOwnerId(season.users, roster.owner_id);
       const points = (roster.settings.fpts || 0) + (roster.settings.fpts_decimal || 0) / 100;
@@ -318,16 +353,18 @@ function calculateAllTimeRecords(seasonsData: SeasonData[]) {
         points,
         wins: roster.settings.wins || 0,
         losses: roster.settings.losses || 0,
+        ties: roster.settings.ties || 0,
+        winPct: (() => {
+          const { wins = 0, losses = 0, ties = 0 } = roster.settings;
+          const games = wins + losses + ties;
+          return games > 0 ? (wins + ties / 2) / games : 0;
+        })(),
       });
     }
   }
 
   return {
     mostPointsSeason: [...allRecords].sort((a, b) => b.points - a.points),
-    mostWinsSeason: [...allRecords].sort((a, b) => {
-      const winsDiff = b.wins - a.wins;
-      if (winsDiff !== 0) return winsDiff;
-      return a.losses - b.losses;
-    }),
+    bestRecordSeason: [...allRecords].sort((a, b) => b.winPct - a.winPct || b.wins - a.wins),
   };
 }

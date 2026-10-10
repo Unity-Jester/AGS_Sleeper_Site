@@ -10,8 +10,9 @@ import {
   getPlayerAvatarUrl,
   getLeagueHistory,
   getAllSeasonTransactions,
+  getDraftTradedPicks,
 } from '@/lib/sleeper';
-import { resolveDraftedRosters } from '@/lib/draftAttribution';
+import { resolveDraftedRosters, correctSlotOwners } from '@/lib/draftAttribution';
 import { fetchFantasyCalcValues } from '@/lib/rankings';
 import { findStartupDraftId, fitDraftSlotValues } from '@/lib/draftValues';
 import { ordinalSuffix, getPositionTextColor, getTeamName } from '@/lib/utils';
@@ -135,7 +136,10 @@ async function getAllDraftData(currentLeagueId: string): Promise<SeasonDraftData
           // Sleeper's board can credit a pick to the slot's former owner
           // when pick trades involved a manager who has since left; the
           // players' own transaction history says who really drafted them
-          const boardPicks = await getDraftPicks(draft.draft_id);
+          const [boardPicks, tradedPicks] = await Promise.all([
+            getDraftPicks(draft.draft_id),
+            getDraftTradedPicks(draft.draft_id).catch(() => []),
+          ]);
           const drafters = resolveDraftedRosters(
             boardPicks,
             draft.start_time || draft.created,
@@ -146,6 +150,15 @@ async function getAllDraftData(currentLeagueId: string): Promise<SeasonDraftData
             ...pick,
             roster_id: drafters.get(pick.pick_no) ?? pick.roster_id,
           }));
+          // The same problem can map slots to the wrong original owner
+          const correctedDraft: SleeperDraft = {
+            ...draft,
+            slot_to_roster_id: correctSlotOwners(
+              draft.slot_to_roster_id || {},
+              picks.map(p => ({ draft_slot: p.draft_slot, round: p.round, drafter: p.roster_id })),
+              tradedPicks
+            ),
+          };
 
           // Judge each pick against what its slot typically produced in
           // this same draft class
@@ -218,7 +231,7 @@ async function getAllDraftData(currentLeagueId: string): Promise<SeasonDraftData
 
           allDraftData.push({
             season: draft.season,
-            draft,
+            draft: correctedDraft,
             picks: picksWithValues,
             managerStats,
             users,

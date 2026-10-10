@@ -135,6 +135,16 @@ export default async function TradesPage({ params }: LeaguePageProps) {
       ...Object.keys(t.drops || {}),
     ]);
     const rosteredPlayerIds = rosters.flatMap(r => r.players || []);
+    // Who each traded pick became, only for picks that appear in trades
+    const draftedPicks: Record<string, string> = {};
+    for (const trade of allTrades) {
+      for (const pick of trade.draft_picks || []) {
+        const key = `${pick.season}_${pick.round}_${pick.roster_id}`;
+        const drafted = draftMap.get(key);
+        if (drafted) draftedPicks[key] = drafted.playerName;
+      }
+    }
+
     const clientPlayers = buildClientPlayersMap(players, [
       ...tradedPlayerIds,
       ...rosteredPlayerIds,
@@ -193,6 +203,7 @@ export default async function TradesPage({ params }: LeaguePageProps) {
           players={clientPlayers}
           currentSeason={league.season}
           tradeValues={tradeValues}
+          draftedPicks={draftedPicks}
         />
       </div>
     );

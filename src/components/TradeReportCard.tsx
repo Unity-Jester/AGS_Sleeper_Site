@@ -63,8 +63,9 @@ function formatDate(timestamp: number): string {
 // Format pick display with what it became
 function formatPick(pick: AnalyzedPick): string {
   const roundLabel = `${pick.season} ${pick.round}${pick.round === 1 ? 'st' : pick.round === 2 ? 'nd' : pick.round === 3 ? 'rd' : 'th'}`;
-  if (pick.wasUsedByTeam && pick.becamePlayer) {
-    return `${roundLabel} (${pick.becamePlayer})`;
+  // Once drafted, a pick shows who it became, whichever team made the pick
+  if (pick.becamePlayer) {
+    return `${roundLabel} → ${pick.becamePlayer}`;
   }
   return roundLabel;
 }

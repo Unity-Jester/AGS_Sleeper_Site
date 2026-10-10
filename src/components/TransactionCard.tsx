@@ -17,6 +17,8 @@ interface TransactionCardProps {
   players: SleeperPlayersMap;
   tradeValues?: TradeValueSwing[];
   valueChanges?: TransactionValueChange[];
+  // Who each drafted pick became, keyed "season_round_originalRosterId"
+  draftedPicks?: Record<string, string>;
 }
 
 function formatNet(value: number): string {
@@ -71,6 +73,7 @@ export default function TransactionCard({
   players,
   tradeValues,
   valueChanges,
+  draftedPicks,
 }: TransactionCardProps) {
   const getTeamName = (rosterId: number) => {
     const roster = rosters.find(r => r.roster_id === rosterId);
@@ -185,6 +188,9 @@ export default function TransactionCard({
                 {teamPicks[rosterId]?.map((pick, idx) => (
                   <div key={idx} className="text-sm text-sleeper-green">
                     {pick.season} Round {pick.round} Pick
+                    {draftedPicks?.[`${pick.season}_${pick.round}_${pick.roster_id}`] && (
+                      <span className="text-white"> → {draftedPicks[`${pick.season}_${pick.round}_${pick.roster_id}`]}</span>
+                    )}
                     {pick.previous_owner_id !== pick.owner_id && (
                       <span className="text-gray-500"> (from {getTeamName(pick.previous_owner_id)})</span>
                     )}

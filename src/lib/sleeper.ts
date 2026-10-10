@@ -307,6 +307,8 @@ export interface DraftedPlayer {
   rosterId: number;
   playerId: string;
   playerName: string;
+  // When the draft started
+  draftedAt?: number;
 }
 
 // Get all draft picks from all historical seasons
@@ -379,6 +381,7 @@ async function buildDraftMap(leagueIds: string[]): Promise<Map<string, DraftedPl
         round: pick.round,
         pick: pick.pick_no,
         rosterId: drafters.get(pick.pick_no) ?? pick.roster_id,
+        draftedAt: draft.start_time || draft.created,
         playerId: pick.player_id,
         playerName: pick.metadata?.first_name && pick.metadata?.last_name
           ? `${pick.metadata.first_name} ${pick.metadata.last_name}`

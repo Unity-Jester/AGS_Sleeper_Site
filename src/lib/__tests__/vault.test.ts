@@ -121,6 +121,22 @@ describe('buildVaultTrades', () => {
     expect(side1.trackedAssets).toBe(1);
   });
 
+  it("doesn't count an asset untracked on trade day as swing", () => {
+    // Roster 2's side is an unknown rookie the sheet never valued; today it
+    // carries a FantasyCalc estimate. That estimate isn't a gain.
+    const trade = makeTrade({ adds: { star: 1, unknown_rookie: 2 } });
+    const fallback = { playerValues: new Map([['unknown_rookie', 20000]]), pickValues: new Map(), scale: 1 };
+    const [vt] = buildVaultTrades([trade], null, makeSheet(), mapping, {}, 60, fallback);
+    const side2 = vt.sides.find(s => s.rosterId === 2)!;
+    expect(side2.todayValue).toBe(20000);
+    expect(side2.startTrackedAssets).toBe(0);
+    expect(vt.leaderRosterId).toBe(2);
+    // Only Star (4000 -> 9000) is valued at both ends: the leader's margin
+    // over it shrank by 5000
+    expect(vt.swing).toBe(-5000);
+    expect(vt.swingIsPartial).toBe(true);
+  });
+
   it('reports untracked assets via coverage counts', () => {
     const trade = makeTrade({ adds: { star: 1, unknown_rookie: 2 } });
     const [vt] = buildVaultTrades([trade], null, makeSheet(), mapping);

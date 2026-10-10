@@ -7,11 +7,29 @@ import { useRouter } from 'next/navigation';
 export default function PortfolioEntry() {
   const router = useRouter();
   const [username, setUsername] = useState('');
+  const [checking, setChecking] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  // Check the username exists before remembering it: a saved typo would
+  // redirect every later visit to "User Not Found"
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const value = username.trim();
     if (!value) return;
+    setChecking(true);
+    setError(null);
+    try {
+      const res = await fetch(`https://api.sleeper.app/v1/user/${encodeURIComponent(value)}`);
+      const user = res.ok ? await res.json() : null;
+      if (!user?.user_id) {
+        setError(`No Sleeper user named "${value}" found.`);
+        return;
+      }
+    } catch {
+      // Sleeper unreachable: let the portfolio page report it
+    } finally {
+      setChecking(false);
+    }
     document.cookie = `portfolioUsername=${encodeURIComponent(value)}; path=/; max-age=31536000; samesite=lax`;
     router.push(`/portfolio/${encodeURIComponent(value)}`);
   };
@@ -44,11 +62,12 @@ export default function PortfolioEntry() {
         />
         <button
           type="submit"
-          disabled={!username.trim()}
+          disabled={!username.trim() || checking}
           className="w-full px-4 py-3.5 bg-gradient-to-b from-gold-400 to-gold-600 text-sleeper-dark font-semibold rounded-xl hover:shadow-gold-glow hover:brightness-110 transition-all disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:shadow-none"
         >
-          View My Leagues
+          {checking ? 'Checking…' : 'View My Leagues'}
         </button>
+        {error && <p className="text-sm text-sleeper-red text-center">{error}</p>}
       </form>
     </div>
   );

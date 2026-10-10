@@ -7,10 +7,9 @@ import {
   getAllHistoricalDrafts,
   getAllSeasonTransactions,
   getLeagueHistory,
-  getLeagueDrafts,
-  getDraftPicks,
   getUserByOwnerId,
 } from '@/lib/sleeper';
+import { FantasyCalcSettings } from '@/lib/types';
 import { fetchHistoricalValues, buildPlayerNameMapping } from '@/lib/historicalValues';
 import { fetchFantasyCalcValues } from '@/lib/rankings';
 import {
@@ -30,6 +29,25 @@ export const revalidate = 3600; // history moves slowly
 
 interface LeaguePageProps {
   params: { leagueId: string };
+  searchParams?: { all?: string };
+}
+
+// Ledger cards rendered by default; each is a server-drawn chart, and all
+// 500+ made the page several megabytes
+const LEDGER_LIMIT = 40;
+
+function deriveLeagueSettings(
+  rosterPositions: string[],
+  scoringSettings: Record<string, number>,
+  totalRosters: number
+): FantasyCalcSettings {
+  const qbCount = rosterPositions.filter(pos => pos === 'QB' || pos === 'SUPER_FLEX').length;
+  const recValue = scoringSettings?.rec ?? 1;
+  return {
+    numQbs: qbCount >= 2 ? 2 : 1,
+    ppr: recValue === 0 ? 0 : recValue === 0.5 ? 0.5 : 1,
+    numTeams: totalRosters || 12,
+  };
 }
 
 const SIDE_COLORS = ['#d4b26a', '#8e8a7e', '#c084fc'];
@@ -148,8 +166,11 @@ function FranchiseSparkline({
   points,
   current,
   peakAtEnd,
+  peak,
 }: {
   points: SeriesPoint[];
+  // The true (daily) peak; the sparkline's samples can miss it
+  peak?: SeriesPoint;
   current: number;
   peakAtEnd: boolean;
 }) {
@@ -173,10 +194,18 @@ function FranchiseSparkline({
     .join(' ');
   const area = `${line} L${x(points.length - 1).toFixed(1)},${H - PAD} L${x(0).toFixed(1)},${H - PAD} Z`;
 
+  // Mark the sample nearest the real peak date
   let peakIdx = 0;
-  points.forEach((p, i) => {
-    if (p.value > points[peakIdx].value) peakIdx = i;
-  });
+  if (peak) {
+    points.forEach((p, i) => {
+      if (Math.abs(Date.parse(p.date) - Date.parse(peak.date)) < Math.abs(Date.parse(points[peakIdx].date) - Date.parse(peak.date))) peakIdx = i;
+    });
+  } else {
+    points.forEach((p, i) => {
+      if (p.value > points[peakIdx].value) peakIdx = i;
+    });
+  }
+  const peakLabel = peak ?? points[peakIdx];
 
   return (
     <svg viewBox={`0 0 ${W} ${H}`} className="w-full" role="img" aria-label="Franchise value over time">
@@ -195,15 +224,9 @@ function FranchiseSparkline({
         />
       )}
       {hasTail && <circle cx={plotRight} cy={y(current)} r="2.5" fill="#d4b26a" />}
-      {peakAtEnd ? (
-        <circle cx={plotRight} cy={y(current)} r="3" fill="#eddcae">
-          <title>{`Peak: ${current.toLocaleString()} - today`}</title>
-        </circle>
-      ) : (
-        <circle cx={x(peakIdx)} cy={y(points[peakIdx].value)} r="3" fill="#eddcae">
-          <title>{`Peak: ${points[peakIdx].value.toLocaleString()} on ${points[peakIdx].date}`}</title>
-        </circle>
-      )}
+      <circle cx={x(peakAtEnd ? points.length - 1 : peakIdx)} cy={y(points[peakAtEnd ? points.length - 1 : peakIdx].value)} r="3" fill="#eddcae">
+        <title>{`Tracked peak: ${peakLabel.value.toLocaleString()} ${peakAtEnd ? '- today' : `on ${peakLabel.date}`}`}</title>
+      </circle>
     </svg>
   );
 }
@@ -224,7 +247,7 @@ function isChartable(trade: VaultTrade): boolean {
   );
 }
 
-export default async function VaultPage({ params }: LeaguePageProps) {
+export default async function VaultPage({ params, searchParams }: LeaguePageProps) {
   const { leagueId } = params;
 
   try {
@@ -258,10 +281,27 @@ export default async function VaultPage({ params }: LeaguePageProps) {
       names.set(roster.roster_id, getTeamName(getUserByOwnerId(users, roster.owner_id), roster.roster_id));
     }
 
+    // A trade is credited to whoever ran the roster that season: three
+    // rosters changed hands, and their old trades carried the new names
+    const tradeNames = new Map<string, Map<number, string>>();
+    for (const season of seasonTrades) {
+      const seasonNames = new Map<number, string>();
+      for (const roster of season.rosters) {
+        seasonNames.set(
+          roster.roster_id,
+          getTeamName(getUserByOwnerId(season.users, roster.owner_id), roster.roster_id)
+        );
+      }
+      for (const trade of season.trades) tradeNames.set(trade.transaction_id, seasonNames);
+    }
+    const namesFor = (trade: VaultTrade) => tradeNames.get(trade.tradeId) ?? names;
+
     // --- Trade aging series ---
     // FantasyCalc fills today's value for assets the sheet doesn't track,
     // rescaled onto the sheet's scale via the overlap between sources.
-    const fc = await fetchFantasyCalcValues();
+    const fc = await fetchFantasyCalcValues(
+      deriveLeagueSettings(league.roster_positions || [], league.scoring_settings || {}, league.total_rosters)
+    );
     const scale = estimateScaleFactor(
       historicalData.values.get(historicalData.dates[0]),
       fc.playerValues,
@@ -273,25 +313,18 @@ export default async function VaultPage({ params }: LeaguePageProps) {
       allTrades, draftMap, historicalData, playerMapping, players, 60, fallback
     );
     const chartable = vaultTrades.filter(isChartable);
+    const ledger = searchParams?.all ? chartable : chartable.slice(0, LEDGER_LIMIT);
     const { heist, photoFinish } = findSuperlatives(vaultTrades);
 
     // --- Franchise timelines: transactions + drafted players across the chain ---
-    const [allTransactions, draftedPlayers] = await Promise.all([
-      Promise.all(leagueChain.map(lg => getAllSeasonTransactions(lg.league_id))).then(r => r.flat()),
-      Promise.all(
-        leagueChain.map(async lg => {
-          const drafts = await getLeagueDrafts(lg.league_id).catch(() => []);
-          const perDraft = await Promise.all(
-            drafts.map(async draft => {
-              const picks = await getDraftPicks(draft.draft_id).catch(() => []);
-              const ts = draft.start_time || draft.created;
-              return picks.map(p => ({ playerId: p.player_id, rosterId: p.roster_id, ts }));
-            })
-          );
-          return perDraft.flat();
-        })
-      ).then(r => r.flat()),
-    ]);
+    // Drafted players come from the shared draft map, which credits each
+    // pick to the team that actually made it (Sleeper's 2023 board doesn't)
+    const allTransactions = (
+      await Promise.all(leagueChain.map(lg => getAllSeasonTransactions(lg.league_id)))
+    ).flat();
+    const draftedPlayers = [...draftMap.values()]
+      .filter(d => d.draftedAt)
+      .map(d => ({ playerId: d.playerId, rosterId: d.rosterId, ts: d.draftedAt! }));
 
     const events = buildRosterEvents(allTransactions, draftedPlayers);
 
@@ -303,6 +336,10 @@ export default async function VaultPage({ params }: LeaguePageProps) {
     ].filter(ts => ts > 0);
     const inceptionTs = inceptionCandidates.length > 0 ? Math.min(...inceptionCandidates) : 0;
     const franchiseSampleDates = sampleDates(historicalData.dates, inceptionTs, 48);
+    // Peaks come from every day, not the 48 sparkline samples (which
+    // missed real peaks by up to a year)
+    const inceptionDay = new Date(inceptionTs).toISOString().slice(0, 10);
+    const dailyDates = historicalData.dates.filter(d => d >= inceptionDay).reverse();
     const latestSheetValues = historicalData.values.get(historicalData.dates[0]);
     const franchises = rosters
       .map(roster => {
@@ -313,14 +350,21 @@ export default async function VaultPage({ params }: LeaguePageProps) {
           playerMapping,
           franchiseSampleDates
         );
-        let peak = series[0] || { date: '', value: 0 };
-        for (const p of series) if (p.value > peak.value) peak = p;
+        const daily = reconstructFranchiseSeries(
+          roster.players || [],
+          events.get(roster.roster_id) || [],
+          historicalData,
+          playerMapping,
+          dailyDates
+        );
+        let peak = daily[0] || { date: '', value: 0 };
+        for (const p of daily) if (p.value > peak.value) peak = p;
 
         // Current value gets the same treatment as trade chips: real sheet
         // value for tracked players plus rescaled FantasyCalc estimates for
         // the rest. Without this, rookie-heavy rosters rank artificially
         // low here while ranking high on the Teams page.
-        const trackedNow = series[series.length - 1]?.value || 0;
+        const trackedNow = daily[daily.length - 1]?.value || 0;
         let estimate = 0;
         for (const playerId of roster.players || []) {
           const col = playerMapping.get(playerId);
@@ -333,14 +377,16 @@ export default async function VaultPage({ params }: LeaguePageProps) {
 
         const current = Math.round(trackedNow + estimate);
         const currentIsEstimated = estimate > 0;
-        // If today's (estimate-inclusive) value tops the tracked history,
-        // the peak IS now - never show a "peak" below the current value.
-        const peakIsCurrent = current > peak.value;
+        // The peak is judged on sheet-tracked value alone, like the
+        // history it's compared with; today's estimate-inclusive value is
+        // shown separately. (Mixing them put half the league at an
+        // all-time peak "right now".)
+        const peakIsCurrent = peak.date === daily[daily.length - 1]?.date;
         return {
           rosterId: roster.roster_id,
           name: names.get(roster.roster_id) || `Team ${roster.roster_id}`,
           series,
-          peak: peakIsCurrent ? { date: 'today', value: current } : peak,
+          peak,
           peakIsCurrent,
           current,
           currentIsEstimated,
@@ -363,7 +409,7 @@ export default async function VaultPage({ params }: LeaguePageProps) {
             {title}
           </p>
           <p className="text-sm text-white mb-1">
-            {trade.sides.map(s => names.get(s.rosterId) || `Team ${s.rosterId}`).join(' vs ')}
+            {trade.sides.map(s => namesFor(trade).get(s.rosterId) || `Team ${s.rosterId}`).join(' vs ')}
             <span className="text-gray-500 ml-2 text-xs">{formatDate(trade.date)}</span>
           </p>
           <div className="space-y-1 mb-2">
@@ -381,7 +427,7 @@ export default async function VaultPage({ params }: LeaguePageProps) {
               </p>
             ))}
           </div>
-          <TradeAgingChart trade={trade} names={names} />
+          <TradeAgingChart trade={trade} names={namesFor(trade)} />
           <p className="text-xs text-gray-400 mt-2">{line(trade)}</p>
         </div>
       );
@@ -404,7 +450,7 @@ export default async function VaultPage({ params }: LeaguePageProps) {
         {(heist || photoFinish || peakFranchise) && (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {superlativeCard('The Heist', '\u{1F3C6}', heist, t =>
-              `${names.get(t.leaderRosterId!) || 'The winner'} has gained ${abbreviateNumber(Math.abs(Math.round(t.swing)))} of separation since trade day.`
+              `${namesFor(t).get(t.leaderRosterId!) || 'The winner'} has gained ${abbreviateNumber(Math.abs(Math.round(t.swing)))} of separation since trade day.`
             )}
             {superlativeCard('The Photo Finish', '\u{2696}\u{FE0F}', photoFinish, t =>
               `Still separated by just ${abbreviateNumber(Math.abs(Math.round(t.gapNow)))} after ${Math.round((Date.now() - t.date) / (30 * 24 * 3600 * 1000))} months.`
@@ -420,13 +466,11 @@ export default async function VaultPage({ params }: LeaguePageProps) {
                   points={peakFranchise.series}
                   current={peakFranchise.current}
                   peakAtEnd={peakFranchise.peakIsCurrent}
+                  peak={peakFranchise.peak}
                 />
                 <p className="text-xs text-gray-400 mt-2">
                   Highest roster value in league history:{' '}
-                  <span className="text-gold-400">
-                    {peakFranchise.peakIsCurrent && peakFranchise.currentIsEstimated ? '\u2248' : ''}
-                    {peakFranchise.peak.value.toLocaleString()}
-                  </span>
+                  <span className="text-gold-400">{peakFranchise.peak.value.toLocaleString()}</span>
                   {peakFranchise.peakIsCurrent ? ' \u2014 right now.' : ` on ${peakFranchise.peak.date}.`}
                 </p>
               </div>
@@ -457,10 +501,9 @@ export default async function VaultPage({ params }: LeaguePageProps) {
                     {abbreviateNumber(f.current)}
                   </p>
                 </div>
-                <FranchiseSparkline points={f.series} current={f.current} peakAtEnd={f.peakIsCurrent} />
+                <FranchiseSparkline points={f.series} current={f.current} peakAtEnd={f.peakIsCurrent} peak={f.peak} />
                 <p className="text-[11px] text-gray-500 mt-1">
-                  Peak {f.peakIsCurrent && f.currentIsEstimated ? '\u2248' : ''}
-                  {abbreviateNumber(f.peak.value)} &middot; {f.peakIsCurrent ? 'today' : f.peak.date}
+                  Tracked peak {abbreviateNumber(f.peak.value)} &middot; {f.peakIsCurrent ? 'today' : f.peak.date}
                 </p>
               </div>
             ))}
@@ -472,11 +515,18 @@ export default async function VaultPage({ params }: LeaguePageProps) {
           <h2 className="text-xl font-semibold text-white mb-1">The Trade Ledger</h2>
           <p className="text-sm text-gray-400 mb-4">
             {chartable.length} of {vaultTrades.length} trades old enough to chart &mdash; watch them age
+            {ledger.length < chartable.length && (
+              <>
+                {' '}&middot; showing the {ledger.length} most recent{' '}
+                <a href="?all=1" className="text-sleeper-accent hover:underline">show all</a>
+              </>
+            )}
           </p>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {chartable.map(trade => {
+            {ledger.map(trade => {
               const badge = coverageBadge(trade);
-              const leaderName = trade.leaderRosterId !== null ? names.get(trade.leaderRosterId) : null;
+              const tradeTeamNames = namesFor(trade);
+              const leaderName = trade.leaderRosterId !== null ? tradeTeamNames.get(trade.leaderRosterId) : null;
               return (
                 <div key={trade.tradeId} className="panel panel-hover p-4">
                   <div className="flex items-center justify-between gap-2 mb-2">
@@ -495,7 +545,7 @@ export default async function VaultPage({ params }: LeaguePageProps) {
                           style={{ backgroundColor: SIDE_COLORS[i % SIDE_COLORS.length] }}
                         />
                         <span className="text-white shrink-0">
-                          {truncateName(names.get(side.rosterId) || `Team ${side.rosterId}`, 14)}
+                          {truncateName(tradeTeamNames.get(side.rosterId) || `Team ${side.rosterId}`, 14)}
                         </span>
                         <span
                           className="text-gray-500 tabular-nums text-xs shrink-0"
@@ -513,7 +563,7 @@ export default async function VaultPage({ params }: LeaguePageProps) {
                       </div>
                     ))}
                   </div>
-                  <TradeAgingChart trade={trade} names={names} />
+                  <TradeAgingChart trade={trade} names={tradeTeamNames} />
                   {leaderName && (
                     <p className="text-xs text-gray-400 mt-2">
                       {trade.swing >= 0 ? (
@@ -521,6 +571,7 @@ export default async function VaultPage({ params }: LeaguePageProps) {
                           <span className="text-sleeper-green">{truncateName(leaderName, 18)}</span> ahead by{' '}
                           {abbreviateNumber(Math.abs(Math.round(trade.gapNow)))}, up{' '}
                           {abbreviateNumber(Math.abs(Math.round(trade.swing)))} since trade day
+                          {trade.swingIsPartial && <span className="text-gray-500"> (tracked assets)</span>}
                         </>
                       ) : (
                         <>

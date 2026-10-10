@@ -80,6 +80,7 @@ export interface LeagueSettings {
 export interface SleeperRoster {
   roster_id: number;
   owner_id: string;
+  co_owners?: string[] | null;
   league_id: string;
   starters: string[];
   players: string[];

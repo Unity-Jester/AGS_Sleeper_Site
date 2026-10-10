@@ -44,9 +44,17 @@ function deriveLeagueSettings(league: SleeperLeague): FantasyCalcSettings {
   };
 }
 
+// Contender windows only mean something in dynasty leagues
+const LEAGUE_KIND: Record<number, string> = { 0: 'Redraft', 1: 'Keeper', 2: 'Dynasty', 3: 'Guillotine' };
+
+const SWITCH_USER = { href: '/portfolio?switch=1', label: 'Try another username' };
+
 interface LeagueSummary {
   league: SleeperLeague;
-  myTeam: TeamWindow;
+  isDynasty: boolean;
+  // Guillotine/chopped leagues empty a roster when it's cut
+  eliminated: boolean;
+  myTeam: TeamWindow | null;
   record: { wins: number; losses: number; ties: number };
   totalRosters: number;
   myPlayerIds: string[];
@@ -67,6 +75,8 @@ export default async function PortfolioUserPage({ params }: PortfolioPageProps) 
         <ErrorState
           title="User Not Found"
           detail={`No Sleeper user named "${username}" was found.`}
+          action={SWITCH_USER}
+          transient={false}
         />
       );
     }
@@ -85,6 +95,8 @@ export default async function PortfolioUserPage({ params }: PortfolioPageProps) 
         <ErrorState
           title="No Leagues Found"
           detail={`${user.display_name || username} has no NFL leagues in ${season} or ${shownSeason}.`}
+          action={SWITCH_USER}
+          transient={false}
         />
       );
     }
@@ -101,28 +113,34 @@ export default async function PortfolioUserPage({ params }: PortfolioPageProps) 
             fetchFantasyCalcValues(deriveLeagueSettings(league)),
           ]);
 
-          const myRoster = rosters.find(r => r.owner_id === user.user_id);
+          const myRoster = rosters.find(
+            r => r.owner_id === user.user_id || r.co_owners?.includes(user.user_id)
+          );
           if (!myRoster) return null;
 
+          // Empty (eliminated) rosters would drag down the league median
+          const activeRosters = rosters.filter(r => (r.players || []).length > 0);
+          const eliminated = (myRoster.players || []).length === 0;
           const teams = analyzeTeamWindows(
-            rosters,
+            activeRosters,
             leagueUsers,
             players,
             playerValues,
             league.roster_positions || []
           );
-          const myTeam = teams.find(t => t.rosterId === myRoster.roster_id);
-          if (!myTeam) return null;
+          const myTeam = eliminated ? null : teams.find(t => t.rosterId === myRoster.roster_id) ?? null;
 
           return {
             league,
+            isDynasty: league.settings?.type === 2,
+            eliminated,
             myTeam,
             record: {
               wins: myRoster.settings.wins || 0,
               losses: myRoster.settings.losses || 0,
               ties: myRoster.settings.ties || 0,
             },
-            totalRosters: rosters.length,
+            totalRosters: activeRosters.length,
             myPlayerIds: myRoster.players || [],
           };
         } catch {
@@ -137,6 +155,8 @@ export default async function PortfolioUserPage({ params }: PortfolioPageProps) 
         <ErrorState
           title="No Rosters Found"
           detail={`Found leagues for ${user.display_name || username} but no owned rosters.`}
+          action={SWITCH_USER}
+          transient={false}
         />
       );
     }
@@ -144,6 +164,7 @@ export default async function PortfolioUserPage({ params }: PortfolioPageProps) 
     // Verdict tally + exposure across the portfolio
     const verdictCounts = new Map<WindowVerdict, number>();
     for (const s of portfolio) {
+      if (!s.isDynasty || !s.myTeam) continue;
       verdictCounts.set(s.myTeam.verdict, (verdictCounts.get(s.myTeam.verdict) || 0) + 1);
     }
 
@@ -199,7 +220,7 @@ export default async function PortfolioUserPage({ params }: PortfolioPageProps) 
         {/* League cards */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {portfolio.map(s => {
-            const meta = VERDICT_META[s.myTeam.verdict];
+            const meta = s.myTeam && s.isDynasty ? VERDICT_META[s.myTeam.verdict] : null;
             return (
               <Link
                 key={s.league.league_id}
@@ -208,9 +229,19 @@ export default async function PortfolioUserPage({ params }: PortfolioPageProps) 
               >
                 <div className="flex items-center justify-between gap-2 mb-3">
                   <p className="font-semibold text-white truncate">{s.league.name}</p>
-                  <span className={`shrink-0 px-2 py-0.5 rounded text-xs font-semibold ${meta.chip}`}>
-                    {meta.label}
-                  </span>
+                  {s.eliminated ? (
+                    <span className="shrink-0 px-2 py-0.5 rounded text-xs font-semibold bg-sleeper-red/15 text-sleeper-red">
+                      Eliminated
+                    </span>
+                  ) : meta ? (
+                    <span className={`shrink-0 px-2 py-0.5 rounded text-xs font-semibold ${meta.chip}`}>
+                      {meta.label}
+                    </span>
+                  ) : (
+                    <span className="shrink-0 px-2 py-0.5 rounded text-xs font-semibold bg-white/[0.06] text-gray-300">
+                      {LEAGUE_KIND[s.league.settings?.type] ?? 'League'}
+                    </span>
+                  )}
                 </div>
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center">
                   <div>
@@ -222,20 +253,20 @@ export default async function PortfolioUserPage({ params }: PortfolioPageProps) 
                   </div>
                   <div>
                     <p className="text-white font-bold tabular-nums">
-                      #{s.myTeam.valueRank}
+                      {s.myTeam ? `#${s.myTeam.valueRank}` : '—'}
                       <span className="text-gray-500 font-normal">/{s.totalRosters}</span>
                     </p>
                     <p className="text-[11px] text-gray-500">Value Rank</p>
                   </div>
                   <div>
                     <p className="text-gold-400 font-bold tabular-nums">
-                      {abbreviateNumber(Math.round(s.myTeam.totalValue))}
+                      {s.myTeam ? abbreviateNumber(Math.round(s.myTeam.totalValue)) : '—'}
                     </p>
                     <p className="text-[11px] text-gray-500">Roster Value</p>
                   </div>
                   <div>
                     <p className="text-white font-bold tabular-nums">
-                      {s.myTeam.weightedAge !== null ? s.myTeam.weightedAge.toFixed(1) : '—'}
+                      {s.myTeam?.weightedAge != null ? s.myTeam.weightedAge.toFixed(1) : '—'}
                     </p>
                     <p className="text-[11px] text-gray-500">Avg Age</p>
                   </div>
@@ -286,6 +317,7 @@ export default async function PortfolioUserPage({ params }: PortfolioPageProps) 
       <ErrorState
         title="Error Loading Portfolio"
         detail={`Could not load leagues for "${username}".`}
+        action={SWITCH_USER}
       />
     );
   }

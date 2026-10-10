@@ -23,6 +23,11 @@ export interface TradeSideSeries {
   assetLabels: string[]; // human-readable haul, e.g. "2026 1st \u2192 Rookie Gem"
   todayValue: number; // last real point plus scaled estimates for untracked assets
   todayIsEstimated: boolean; // true when untracked assets contributed estimates
+  // Assets the sheet valued on trade day, and those same assets' value
+  // then and now: the like-for-like basis for the swing
+  startTrackedAssets: number;
+  comparableStart: number;
+  comparableNow: number;
 }
 
 // Today's-value fallback for assets the sheet doesn't track, rescaled
@@ -62,7 +67,10 @@ export interface VaultTrade {
   // Gap dynamics between the two largest sides (by final value):
   gapStart: number; // leader's margin at the first sampled date
   gapNow: number; // leader's margin today (negative = flipped)
-  swing: number; // gapNow - gapStart from the eventual leader's view
+  // Change in the leader's margin since trade day, over assets valued at
+  // both ends (an asset untracked on trade day can't count as a gain)
+  swing: number;
+  swingIsPartial: boolean; // some assets had no trade-day value
   leaderRosterId: number | null;
 }
 
@@ -220,6 +228,10 @@ export function buildVaultTrades(
       const latestValues = historicalData.values.get(latestDate);
       let todayValue = 0;
       let todayIsEstimated = false;
+      const startValues = historicalData.values.get(dates[0]);
+      let startTrackedAssets = 0;
+      let comparableStart = 0;
+      let comparableNow = 0;
       for (const asset of assets) {
         const anyValue = dates.some(
           d => assetValueAt(historicalData.values.get(d), asset, playerMapping) !== null
@@ -227,6 +239,7 @@ export function buildVaultTrades(
         if (anyValue) tracked++;
 
         const real = assetValueAt(latestValues, asset, playerMapping);
+        let now: number | null = real;
         if (real !== null) {
           todayValue += real;
         } else if (fallback) {
@@ -234,7 +247,15 @@ export function buildVaultTrades(
           if (est !== null) {
             todayValue += est;
             todayIsEstimated = true;
+            now = est;
           }
+        }
+
+        const start = assetValueAt(startValues, asset, playerMapping);
+        if (start !== null) {
+          startTrackedAssets++;
+          comparableStart += start;
+          comparableNow += now ?? 0;
         }
       }
       // FAAB changing hands is labeled but carries no market value
@@ -251,6 +272,9 @@ export function buildVaultTrades(
         assetLabels: labels,
         todayValue: Math.round(todayValue),
         todayIsEstimated,
+        startTrackedAssets,
+        comparableStart: Math.round(comparableStart),
+        comparableNow: Math.round(comparableNow),
       };
     });
 
@@ -262,11 +286,14 @@ export function buildVaultTrades(
       .sort((a, b) => b.todayValue - a.todayValue);
     let gapStart = 0;
     let gapNow = 0;
+    let swing = 0;
     let leaderRosterId: number | null = null;
     if (ranked.length >= 2) {
       const [lead, trail] = ranked;
       gapNow = lead.todayValue - trail.todayValue;
       gapStart = lead.points[0].value - trail.points[0].value;
+      swing =
+        (lead.comparableNow - trail.comparableNow) - (lead.comparableStart - trail.comparableStart);
       leaderRosterId = lead.rosterId;
     }
 
@@ -276,7 +303,8 @@ export function buildVaultTrades(
       sides,
       gapStart,
       gapNow,
-      swing: gapNow - gapStart,
+      swing,
+      swingIsPartial: sides.some(s => s.startTrackedAssets < s.totalAssets),
       leaderRosterId,
     });
   }
@@ -382,8 +410,9 @@ export interface VaultSuperlatives {
   photoFinish: VaultTrade | null; // tightest gap today among aged trades
 }
 
-// Plaques demand clean data: every asset tracked, and both sides still
-// carrying real value. Without the floor, the Photo Finish's minimum-gap
+// Plaques demand clean data: every asset valued on trade day and today by
+// the sheet itself (no estimates), and both sides still carrying real
+// value. Without the floor, the Photo Finish's minimum-gap
 // search is structurally attracted to dead trades where both sides
 // decayed to zero ("separated by just 0").
 const PLAQUE_VALUE_FLOOR = 1000;
@@ -392,7 +421,12 @@ function plaqueEligible(t: VaultTrade): boolean {
   if (t.leaderRosterId === null) return false;
   return t.sides.every(s => {
     const finalValue = s.points[s.points.length - 1]?.value || 0;
-    return s.totalAssets > 0 && s.trackedAssets === s.totalAssets && finalValue >= PLAQUE_VALUE_FLOOR;
+    return (
+      s.totalAssets > 0 &&
+      s.startTrackedAssets === s.totalAssets &&
+      !s.todayIsEstimated &&
+      finalValue >= PLAQUE_VALUE_FLOOR
+    );
   });
 }
 

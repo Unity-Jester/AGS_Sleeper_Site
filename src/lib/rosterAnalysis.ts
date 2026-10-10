@@ -13,11 +13,12 @@ export interface TeamWindow {
   ownerId: string;
   teamName: string;
   avatar: string | null;
-  totalValue: number;
+  totalValue: number; // players + owned picks
   starterValue: number;
   benchValue: number;
+  pickValue: number; // owned future picks
   weightedAge: number | null; // value-weighted average age
-  positionValues: PositionValue[]; // QB/RB/WR/TE + Other, descending
+  positionValues: PositionValue[]; // QB/RB/WR/TE + Other, then Picks
   verdict: WindowVerdict;
   valueRank: number; // 1 = most valuable roster
 }
@@ -77,16 +78,19 @@ export function calculateStarterValue(
 }
 
 // Assign a window verdict from league-relative value and age.
-// Value splits at the league median; a band around the value median is
-// "retooling" (could go either way). Age splits at the league median.
+// Value splits at the league median; teams within 6% of the median are
+// "retooling" (could go either way). The band used to be a share of the
+// best-to-worst spread, so one outlier stretched it across half the league.
+// Age splits at the league median.
+const RETOOLING_BAND = 0.06;
+
 function assignVerdict(
   totalValue: number,
   weightedAge: number | null,
   valueMedian: number,
-  ageMedian: number,
-  valueSpread: number
+  ageMedian: number
 ): WindowVerdict {
-  const nearMedian = Math.abs(totalValue - valueMedian) < valueSpread * 0.08;
+  const nearMedian = Math.abs(totalValue - valueMedian) < valueMedian * RETOOLING_BAND;
   if (nearMedian) return 'retooling';
 
   const strong = totalValue > valueMedian;
@@ -110,7 +114,9 @@ export function analyzeTeamWindows(
   users: SleeperUser[],
   players: SleeperPlayersMap,
   playerValues: Map<string, number>,
-  rosterPositions: string[]
+  rosterPositions: string[],
+  // Owned future picks by roster; dynasty value isn't only players
+  pickValueByRoster?: Map<number, number>
 ): TeamWindow[] {
   const teams = rosters.map(roster => {
     const user = users.find(u => u.user_id === roster.owner_id) || null;
@@ -125,7 +131,9 @@ export function analyzeTeamWindows(
       };
     });
 
-    const totalValue = valued.reduce((sum, p) => sum + p.value, 0);
+    const playerValue = valued.reduce((sum, p) => sum + p.value, 0);
+    const pickValue = pickValueByRoster?.get(roster.roster_id) ?? 0;
+    const totalValue = playerValue + pickValue;
     const starterValue = calculateStarterValue(valued, rosterPositions);
 
     // Value-weighted age over players that carry both an age and value
@@ -148,6 +156,7 @@ export function analyzeTeamWindows(
     const positionValues = [
       ...CORE_POSITIONS.map(pos => ({ position: pos, value: posMap.get(pos) || 0 })),
       ...(posMap.has('Other') ? [{ position: 'Other', value: posMap.get('Other')! }] : []),
+      ...(pickValue > 0 ? [{ position: 'Picks', value: pickValue }] : []),
     ];
 
     return {
@@ -157,7 +166,8 @@ export function analyzeTeamWindows(
       avatar: user?.avatar || null,
       totalValue,
       starterValue,
-      benchValue: totalValue - starterValue,
+      benchValue: playerValue - starterValue,
+      pickValue,
       weightedAge,
       positionValues,
       verdict: 'retooling' as WindowVerdict, // assigned below
@@ -167,7 +177,6 @@ export function analyzeTeamWindows(
 
   const values = teams.map(t => t.totalValue);
   const valueMedian = median(values);
-  const valueSpread = Math.max(...values) - Math.min(...values) || 1;
   const ageMedian = median(
     teams.filter(t => t.weightedAge !== null).map(t => t.weightedAge as number)
   );
@@ -177,8 +186,7 @@ export function analyzeTeamWindows(
       team.totalValue,
       team.weightedAge,
       valueMedian,
-      ageMedian,
-      valueSpread
+      ageMedian
     );
   }
 

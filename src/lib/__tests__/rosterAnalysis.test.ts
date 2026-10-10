@@ -128,4 +128,21 @@ describe('analyzeTeamWindows', () => {
     expect(pv.get('RB')).toBe(1000);
     expect(pv.get('TE')).toBe(0);
   });
+
+  it('adds owned picks to team value', () => {
+    const result = analyzeTeamWindows(
+      [makeRoster(1, 'u1', ['youngScrub']), makeRoster(2, 'u2', ['oldStar'])],
+      users,
+      players,
+      values,
+      ['WR', 'RB'],
+      new Map([[1, 12000]])
+    );
+    const team1 = result.find(t => t.rosterId === 1)!;
+    expect(team1.totalValue).toBe(13000);
+    expect(team1.pickValue).toBe(12000);
+    expect(team1.benchValue).toBe(0);
+    expect(team1.valueRank).toBe(1);
+    expect(team1.positionValues.find(p => p.position === 'Picks')?.value).toBe(12000);
+  });
 });

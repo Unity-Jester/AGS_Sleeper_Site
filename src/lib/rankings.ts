@@ -80,18 +80,31 @@ export function getPickKey(pick: DraftPickSelection): string {
   return `${pick.season} ${pickRoundLabel(pick.round)}`;
 }
 
-// Get available draft pick options
-export function getDraftPickOptions(): {
+// Get available draft pick options. Seasons come from the picks the
+// market actually prices (FantasyCalc lists every tradeable future class,
+// e.g. 2027-2029 once the 2026 rookie draft is done); without values,
+// assume the rookie draft has happened by June and offer the next three.
+export function getDraftPickOptions(
+  pickValues?: Record<string, number>,
+  now: Date = new Date()
+): {
   seasons: string[];
   rounds: { value: number; label: string }[];
 } {
-  const currentYear = new Date().getFullYear();
+  const priced = new Set<string>();
+  for (const key of Object.keys(pickValues || {})) {
+    const match = /^(\d{4}) (1st|2nd|3rd|4th)$/.exec(key);
+    if (match) priced.add(match[1]);
+  }
+
+  let seasons = Array.from(priced).sort();
+  if (seasons.length === 0) {
+    const firstYear = now.getFullYear() + (now.getMonth() >= 5 ? 1 : 0);
+    seasons = [0, 1, 2].map(offset => (firstYear + offset).toString());
+  }
+
   return {
-    seasons: [
-      currentYear.toString(),
-      (currentYear + 1).toString(),
-      (currentYear + 2).toString(),
-    ],
+    seasons,
     rounds: [
       { value: 1, label: '1st' },
       { value: 2, label: '2nd' },

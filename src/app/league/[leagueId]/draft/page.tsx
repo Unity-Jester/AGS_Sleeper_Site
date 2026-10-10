@@ -15,12 +15,13 @@ import {
   fetchHistoricalValues,
   buildPlayerNameMapping,
 } from '@/lib/historicalValues';
-import { resolveDraftPickValue } from '@/lib/draftValues';
+import { resolveDraftPickValue, findStartupDraftId } from '@/lib/draftValues';
 import { ordinalSuffix, getPositionTextColor, getTeamName } from '@/lib/utils';
 import Image from 'next/image';
 import { SleeperDraft, SleeperDraftPick, SleeperUser, SleeperRoster, SleeperPlayersMap } from '@/lib/types';
 import CollapsibleSection from '@/components/CollapsibleSection';
 import ErrorState from '@/components/ErrorState';
+import DraftPicksExplorer, { ExplorerManager, ExplorerPick } from '@/components/DraftPicksExplorer';
 
 export const revalidate = 300; // Revalidate every 5 minutes
 
@@ -52,6 +53,7 @@ interface SeasonDraftData {
   managerStats: ManagerDraftStats[];
   users: SleeperUser[];
   rosters: SleeperRoster[];
+  isStartup: boolean;
 }
 
 interface OverallPickWithSeason extends DraftPickWithValue {
@@ -201,6 +203,7 @@ async function getAllDraftData(currentLeagueId: string): Promise<SeasonDraftData
             managerStats,
             users,
             rosters,
+            isStartup: false,
           });
         } catch {
           // Skip drafts without picks
@@ -211,7 +214,67 @@ async function getAllDraftData(currentLeagueId: string): Promise<SeasonDraftData
     }
   }
 
-  return allDraftData.sort((a, b) => parseInt(b.season) - parseInt(a.season));
+  const startupId = findStartupDraftId(allDraftData.map(d => d.draft));
+  for (const d of allDraftData) {
+    d.isStartup = d.draft.draft_id === startupId;
+  }
+
+  return allDraftData.sort(
+    (a, b) =>
+      parseInt(b.season) - parseInt(a.season) ||
+      (b.draft.start_time || b.draft.created) - (a.draft.start_time || a.draft.created)
+  );
+}
+
+// Flatten every manager's picks (startup included, flagged) for the
+// per-manager picks & grades explorer
+function buildExplorerData(
+  draftData: SeasonDraftData[],
+  overallStats: OverallManagerStats[]
+): { managers: ExplorerManager[]; picks: ExplorerPick[] } {
+  const managers = new Map<string, ExplorerManager>();
+  const picks: ExplorerPick[] = [];
+
+  // draftData is newest first, so the first sighting carries the current team name
+  for (const seasonData of draftData) {
+    const numTeams = seasonData.draft.settings.teams || 12;
+    for (const manager of seasonData.managerStats) {
+      if (!manager.ownerId) continue;
+      if (!managers.has(manager.ownerId)) {
+        const user = getUserByOwnerId(seasonData.users, manager.ownerId);
+        const rank = overallStats.findIndex(m => m.ownerId === manager.ownerId);
+        managers.set(manager.ownerId, {
+          ownerId: manager.ownerId,
+          teamName: manager.teamName,
+          avatarUrl: getUserAvatarUrl(manager.avatar),
+          names: [user?.username, user?.display_name].filter((n): n is string => !!n),
+          rank: rank >= 0 ? rank + 1 : null,
+        });
+      }
+      for (const pick of manager.picks) {
+        picks.push({
+          ownerId: manager.ownerId,
+          draftId: seasonData.draft.draft_id,
+          season: seasonData.season,
+          isStartup: seasonData.isStartup,
+          round: pick.round,
+          pickNo: pick.pick_no,
+          pickInRound: ((pick.pick_no - 1) % numTeams) + 1,
+          playerId: pick.player_id,
+          playerName: pick.playerName,
+          position: pick.metadata?.position || '',
+          pickValue: pick.pickValue,
+          currentValue: pick.currentValue,
+          valueDiff: pick.valueDiff,
+        });
+      }
+    }
+  }
+
+  return {
+    managers: Array.from(managers.values()).sort((a, b) => a.teamName.localeCompare(b.teamName)),
+    picks,
+  };
 }
 
 // Calculate overall stats across all drafts
@@ -323,14 +386,19 @@ export default async function DraftPage({ params }: LeaguePageProps) {
     ]);
 
     const mostRecentDraft = draftData[0];
-    const overallStats = calculateOverallStats(draftData);
+    // The startup draft is shown but never scored or ranked
+    const scoredDrafts = draftData.filter(d => !d.isStartup);
+    const startupDraft = draftData.find(d => d.isStartup);
+    const overallStats = calculateOverallStats(scoredDrafts);
+    const explorer = buildExplorerData(draftData, overallStats);
 
     return (
       <div className="space-y-8">
         <div>
           <h1 className="text-3xl text-white">Draft Center</h1>
           <p className="text-gray-400 mt-1">
-            {draftData.length} draft{draftData.length !== 1 ? 's' : ''} analyzed
+            {scoredDrafts.length} draft{scoredDrafts.length !== 1 ? 's' : ''} analyzed
+            {startupDraft && ` · ${startupDraft.season} startup draft excluded from scoring`}
           </p>
         </div>
 
@@ -358,13 +426,17 @@ export default async function DraftPage({ params }: LeaguePageProps) {
           </div>
         )}
 
+        {/* Per-manager picks and grades */}
+        <DraftPicksExplorer managers={explorer.managers} picks={explorer.picks} />
+
         {/* Overall Draft Rankings */}
         {overallStats.length > 0 && (
           <div className="panel overflow-hidden">
             <div className="px-4 py-3 border-b border-white/[0.06]">
               <h2 className="text-lg font-semibold text-white">Overall Draft Rankings</h2>
               <p className="text-sm text-gray-400">
-                Combined performance across all {draftData.length} draft{draftData.length !== 1 ? 's' : ''}
+                Combined performance across all {scoredDrafts.length} draft{scoredDrafts.length !== 1 ? 's' : ''}
+                {startupDraft && ' (startup excluded)'}
               </p>
             </div>
             <div className="divide-y divide-white/[0.05]">
@@ -487,7 +559,7 @@ export default async function DraftPage({ params }: LeaguePageProps) {
         )}
 
         {/* Draft Rankings by Year - Collapsible */}
-        {draftData.map((seasonData) => (
+        {scoredDrafts.map((seasonData) => (
           <CollapsibleSection
             key={seasonData.draft.draft_id}
             title={`${seasonData.season} Draft Rankings`}
@@ -612,22 +684,22 @@ export default async function DraftPage({ params }: LeaguePageProps) {
         ))}
 
         {/* Top 30 Picks Across All Years */}
-        {draftData.length > 0 && (
+        {scoredDrafts.length > 0 && (
           <div className="panel overflow-hidden">
             <div className="px-4 py-3 border-b border-white/[0.06]">
               <h2 className="text-lg font-semibold text-white">
                 Top 30 Draft Picks (All-Time)
               </h2>
               <p className="text-sm text-gray-400">
-                Best picks across all {draftData.length} draft{draftData.length !== 1 ? 's' : ''} by value gained
+                Best picks across all {scoredDrafts.length} draft{scoredDrafts.length !== 1 ? 's' : ''} by value gained
               </p>
             </div>
             <div className="divide-y divide-white/[0.05]">
-              {getAllPicksWithSeason(draftData)
+              {getAllPicksWithSeason(scoredDrafts)
                 .slice(0, 30)
                 .map((pick, idx) => {
                   // Find the season data to get team name
-                  const seasonData = draftData.find(d => d.season === pick.season);
+                  const seasonData = scoredDrafts.find(d => d.draft.draft_id === pick.draft_id);
                   const roster = seasonData?.rosters.find(r => r.roster_id === pick.roster_id);
                   const user = roster && seasonData ? getUserByOwnerId(seasonData.users, roster.owner_id) : null;
                   const teamName = getTeamName(user, pick.roster_id);

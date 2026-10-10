@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { resolveDraftPickValue, DraftPickValueSources } from '../draftValues';
+import { resolveDraftPickValue, DraftPickValueSources, findStartupDraftId, gradeDraftValue } from '../draftValues';
 import { HistoricalValueData } from '../historicalValues';
 
 const T = new Date('2026-07-01T12:00:00Z').getTime();
@@ -95,5 +95,40 @@ describe('resolveDraftPickValue', () => {
     expect(r.currentValue).toBe(9000);
     expect(r.pickValue).toBe(7000); // legacy round-1 estimate
     expect(r.source).toBe('estimate');
+  });
+});
+
+describe('findStartupDraftId', () => {
+  const draft = (id: string, time: number, playerType = 0) => ({
+    draft_id: id,
+    start_time: time,
+    created: time,
+    settings: { player_type: playerType },
+  });
+
+  it('returns the earliest draft', () => {
+    expect(findStartupDraftId([draft('rookie25', 300, 1), draft('startup', 100), draft('rookie24', 200, 1)])).toBe('startup');
+  });
+
+  it('returns null when the earliest draft is rookies-only', () => {
+    expect(findStartupDraftId([draft('rookie24', 100, 1), draft('rookie25', 200, 1)])).toBeNull();
+  });
+
+  it('returns null with no drafts', () => {
+    expect(findStartupDraftId([])).toBeNull();
+  });
+});
+
+describe('gradeDraftValue', () => {
+  it('grades by return on pick cost', () => {
+    expect(gradeDraftValue(1000, 2500)).toBe('A+');
+    expect(gradeDraftValue(1000, 1000)).toBe('B');
+    expect(gradeDraftValue(1000, 600)).toBe('C');
+    expect(gradeDraftValue(1000, 100)).toBe('F');
+  });
+
+  it('handles a zero-cost pick', () => {
+    expect(gradeDraftValue(0, 500)).toBe('A+');
+    expect(gradeDraftValue(0, 0)).toBe('C');
   });
 });

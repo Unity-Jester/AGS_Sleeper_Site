@@ -94,3 +94,50 @@ export function resolveDraftPickValue(
     source: 'estimate',
   };
 }
+
+// The league's startup draft is its first completed draft, unless that
+// draft was rookies-only (player_type 1), which means rosters were
+// imported and the league never held a startup. Startup picks are priced
+// against rookie-pick values they were never traded at, so they're left
+// out of draft scoring.
+export function findStartupDraftId(
+  drafts: Array<{
+    draft_id: string;
+    start_time?: number | null;
+    created: number;
+    settings?: { player_type?: number } | null;
+  }>
+): string | null {
+  if (drafts.length === 0) return null;
+  const first = drafts.reduce((a, b) =>
+    (b.start_time || b.created) < (a.start_time || a.created) ? b : a
+  );
+  return first.settings?.player_type === 1 ? null : first.draft_id;
+}
+
+export type DraftGrade = 'A+' | 'A' | 'A-' | 'B+' | 'B' | 'B-' | 'C+' | 'C' | 'C-' | 'D' | 'F';
+
+const GRADE_THRESHOLDS: Array<[number, DraftGrade]> = [
+  [2.0, 'A+'],
+  [1.6, 'A'],
+  [1.3, 'A-'],
+  [1.15, 'B+'],
+  [1.0, 'B'],
+  [0.85, 'B-'],
+  [0.7, 'C+'],
+  [0.55, 'C'],
+  [0.4, 'C-'],
+  [0.25, 'D'],
+];
+
+// Letter grade from the return on the pick: what the player is worth now
+// relative to what the pick cost. Works the same for a single pick or a
+// manager's whole class (pass the totals).
+export function gradeDraftValue(pickValue: number, currentValue: number): DraftGrade {
+  if (pickValue <= 0) return currentValue > 0 ? 'A+' : 'C';
+  const ratio = currentValue / pickValue;
+  for (const [min, grade] of GRADE_THRESHOLDS) {
+    if (ratio >= min) return grade;
+  }
+  return 'F';
+}

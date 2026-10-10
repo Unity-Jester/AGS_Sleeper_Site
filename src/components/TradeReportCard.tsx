@@ -2,11 +2,16 @@
 
 import { useState } from 'react';
 import { TeamReportCard, TradeAnalysis, TradeAssetValue, AnalyzedPick } from '@/lib/types';
+
+export type ClientReportCard = Omit<TeamReportCard, 'trades'>;
 import { getUserAvatarUrl } from '@/lib/sleeper';
 import Image from 'next/image';
 
 interface TradeReportCardProps {
-  reportCards: TeamReportCard[];
+  // Report cards without their per-trade analyses, which only the server
+  // needs (they were ~0.9MB of page payload)
+  reportCards: ClientReportCard[];
+  totalTrades: number;
 }
 
 // Grade color mapping. A-grades get the gold-foil treatment; the rest
@@ -104,7 +109,7 @@ function TradeSummary({ trade, label }: { trade: TradeAnalysis; label: string })
 }
 
 // Individual report card component
-function ReportCard({ card, rank }: { card: TeamReportCard; rank: number }) {
+function ReportCard({ card, rank }: { card: ClientReportCard; rank: number }) {
   const [expanded, setExpanded] = useState(false);
 
   const winRate = card.totalTrades > 0
@@ -264,18 +269,12 @@ function ReportCard({ card, rank }: { card: TeamReportCard; rank: number }) {
   );
 }
 
-export default function TradeReportCards({ reportCards }: TradeReportCardProps) {
+export default function TradeReportCards({ reportCards, totalTrades }: TradeReportCardProps) {
   const [showAll, setShowAll] = useState(false);
 
   const displayedCards = showAll ? reportCards : reportCards.slice(0, 5);
   const hasMore = reportCards.length > 5;
 
-  // Calculate league-wide stats
-  // Count unique trades: multi-team trades appear on several report cards
-  const totalTrades = new Set(reportCards.flatMap(c => c.trades.map(t => t.tradeId))).size;
-  const avgGrade = reportCards.length > 0
-    ? Math.round(reportCards.reduce((sum, c) => sum + c.gradeScore, 0) / reportCards.length)
-    : 0;
 
   return (
     <div className="space-y-4">
@@ -283,7 +282,7 @@ export default function TradeReportCards({ reportCards }: TradeReportCardProps) 
         <div>
           <h2 className="text-xl font-semibold text-white">Trade Report Cards</h2>
           <p className="text-sm text-gray-400">
-            {totalTrades} total trades • League avg: {avgGrade} pts
+            {totalTrades} total trades
           </p>
           <p className="text-xs text-gray-500 mt-1">
             Values shown are averages of estimated trade-time value and current value

@@ -103,16 +103,34 @@ export default function TransactionCard({
       teamPicks[pick.owner_id].push(pick);
     });
 
+    // FAAB sent in the trade, by receiving team
+    const teamFaab: Record<number, { amount: number; from: number }[]> = {};
+    transaction.waiver_budget?.forEach(b => {
+      if (!b.amount) return;
+      if (!teamFaab[b.receiver]) teamFaab[b.receiver] = [];
+      teamFaab[b.receiver].push({ amount: b.amount, from: b.sender });
+    });
+
+    // A side that only received FAAB still made the trade
     const involvedTeams = [...new Set([
       ...Object.keys(teamAdds).map(Number),
       ...Object.keys(teamPicks).map(Number),
+      ...Object.keys(teamFaab).map(Number),
     ])];
 
     return (
       <div className="panel p-4">
         <div className="flex items-center justify-between mb-3">
           <span className="text-xs font-medium text-sleeper-accent uppercase">Trade</span>
-          <span className="text-xs text-gray-500">{timeAgo(transaction.created)}</span>
+          <span className="text-xs text-gray-500">
+            {timeAgo(transaction.created)} &middot;{' '}
+            {new Date(transaction.created).toLocaleDateString('en-US', {
+              month: 'short',
+              day: 'numeric',
+              year: 'numeric',
+              timeZone: 'UTC',
+            })}
+          </span>
         </div>
 
         <div className="space-y-3">
@@ -156,6 +174,13 @@ export default function TransactionCard({
                     </div>
                   );
                 })}
+
+                {teamFaab[rosterId]?.map((faab, idx) => (
+                  <div key={`faab-${idx}`} className="text-sm text-sleeper-green">
+                    ${faab.amount} FAAB
+                    <span className="text-gray-500"> (from {getTeamName(faab.from)})</span>
+                  </div>
+                ))}
 
                 {teamPicks[rosterId]?.map((pick, idx) => (
                   <div key={idx} className="text-sm text-sleeper-green">

@@ -114,6 +114,11 @@ export default async function TradesPage({ params }: LeaguePageProps) {
     // to annotate the trade history - no extra fetching or analysis.
     const tradeValues = buildTradeValueMap(reportCards);
 
+    // Multi-team trades appear on several cards, so count unique ids; the
+    // per-trade analyses stay on the server
+    const totalTrades = new Set(reportCards.flatMap(c => c.trades.map(t => t.tradeId))).size;
+    const clientReportCards = reportCards.map(({ trades: _trades, ...card }) => card);
+
     // Client components below receive a slimmed players map: full player
     // data is ~5MB and would be serialized into the page payload.
     const tradedPlayerIds = allTrades.flatMap(t => [
@@ -171,7 +176,7 @@ export default async function TradesPage({ params }: LeaguePageProps) {
         />
 
         {/* Trade Report Cards */}
-        <TradeReportCards reportCards={reportCards} />
+        <TradeReportCards reportCards={clientReportCards} totalTrades={totalTrades} />
 
         {/* Trade History - All Seasons */}
         <TradeHistory

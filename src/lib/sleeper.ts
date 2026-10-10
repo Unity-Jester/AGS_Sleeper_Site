@@ -13,6 +13,8 @@ import {
   MatchupPair,
 } from './types';
 import { getTeamName } from './utils';
+import type { TradedPickRecord } from './tradeCalculator';
+import { resolveDraftedRosters, correctSlotOwners } from './draftAttribution';
 
 const SLEEPER_API_BASE = 'https://api.sleeper.app/v1';
 
@@ -52,6 +54,12 @@ export async function getLeagueRosters(leagueId: string): Promise<SleeperRoster[
   return fetchSleeper<SleeperRoster[]>(`/league/${leagueId}/rosters`);
 }
 
+// Future picks that have changed hands (roster_id = original owner,
+// owner_id = current owner)
+export async function getTradedPicks(leagueId: string): Promise<TradedPickRecord[]> {
+  return fetchSleeper<TradedPickRecord[]>(`/league/${leagueId}/traded_picks`);
+}
+
 export async function getLeagueMatchups(leagueId: string, week: number): Promise<SleeperMatchup[]> {
   return fetchSleeper<SleeperMatchup[]>(`/league/${leagueId}/matchups/${week}`);
 }
@@ -71,6 +79,11 @@ export async function getPlayoffBracket(leagueId: string, bracket: 'winners' | '
 // Draft endpoints
 export async function getDraft(draftId: string): Promise<SleeperDraft> {
   return fetchSleeper<SleeperDraft>(`/draft/${draftId}`);
+}
+
+// Pick ownership as of the draft (roster_id = original owner)
+export async function getDraftTradedPicks(draftId: string): Promise<TradedPickRecord[]> {
+  return fetchSleeper<TradedPickRecord[]>(`/draft/${draftId}/traded_picks`);
 }
 
 export async function getDraftPicks(draftId: string): Promise<SleeperDraftPick[]> {
@@ -319,28 +332,50 @@ async function buildDraftMap(leagueIds: string[]): Promise<Map<string, DraftedPl
   // endpoint includes it, and we need it to attribute traded picks.
   const draftsWithPicks = await Promise.all(
     allDrafts.map(async listed => {
-      const [draft, picks] = await Promise.all([
+      const [draft, picks, tradedPicks, transactions, rosters] = await Promise.all([
         getDraft(listed.draft_id).catch(() => listed),
         getDraftPicks(listed.draft_id).catch(() => [] as SleeperDraftPick[]),
+        getDraftTradedPicks(listed.draft_id).catch(() => [] as TradedPickRecord[]),
+        getAllSeasonTransactions(listed.league_id).catch(() => [] as SleeperTransaction[]),
+        getLeagueRosters(listed.league_id).catch(() => [] as SleeperRoster[]),
       ]);
-      return { draft, picks };
+      return { draft, picks, tradedPicks, transactions, rosters };
     })
   );
 
-  for (const { draft, picks } of draftsWithPicks) {
+  for (const { draft, picks, tradedPicks, transactions, rosters } of draftsWithPicks) {
+    // Sleeper can credit picks to the wrong team, and map slots to the
+    // wrong original owner, when pick trades involved a manager who has
+    // since left. The players' transaction history says who really made
+    // each pick, and that in turn pins down whose slot it was.
+    const drafters = resolveDraftedRosters(
+      picks,
+      draft.start_time || draft.created,
+      transactions,
+      rosters
+    );
+    const slotOwners = correctSlotOwners(
+      draft.slot_to_roster_id || {},
+      picks.map(p => ({
+        draft_slot: p.draft_slot,
+        round: p.round,
+        drafter: drafters.get(p.pick_no) ?? p.roster_id,
+      })),
+      tradedPicks
+    );
+
     for (const pick of picks) {
       // Trade records reference a pick by its ORIGINAL slot owner, but in
       // draft results roster_id is whoever actually made the pick (the
       // acquirer, when the pick was traded). Resolve the original owner
       // through the draft's slot map so traded picks match up.
-      const originalOwner =
-        draft.slot_to_roster_id?.[String(pick.draft_slot)] ?? pick.roster_id;
+      const originalOwner = slotOwners[String(pick.draft_slot)] ?? pick.roster_id;
       const key = `${draft.season}_${pick.round}_${originalOwner}`;
       draftMap.set(key, {
         season: draft.season,
         round: pick.round,
         pick: pick.pick_no,
-        rosterId: pick.roster_id,
+        rosterId: drafters.get(pick.pick_no) ?? pick.roster_id,
         playerId: pick.player_id,
         playerName: pick.metadata?.first_name && pick.metadata?.last_name
           ? `${pick.metadata.first_name} ${pick.metadata.last_name}`

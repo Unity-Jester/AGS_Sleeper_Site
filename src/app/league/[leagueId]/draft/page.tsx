@@ -9,7 +9,10 @@ import {
   getUserAvatarUrl,
   getPlayerAvatarUrl,
   getLeagueHistory,
+  getAllSeasonTransactions,
+  getDraftTradedPicks,
 } from '@/lib/sleeper';
+import { resolveDraftedRosters, correctSlotOwners } from '@/lib/draftAttribution';
 import { fetchFantasyCalcValues } from '@/lib/rankings';
 import { findStartupDraftId, fitDraftSlotValues } from '@/lib/draftValues';
 import { ordinalSuffix, getPositionTextColor, getTeamName } from '@/lib/utils';
@@ -103,7 +106,7 @@ async function getAllDraftData(currentLeagueId: string): Promise<SeasonDraftData
 
   // Every player is valued on the current league's FantasyCalc market so
   // all picks share one scale
-  const [{ playerValues }, players] = await Promise.all([
+  const [{ playerValues }, players, chainTransactions] = await Promise.all([
     fetchFantasyCalcValues(
       deriveLeagueSettings(
         currentLeague.roster_positions || [],
@@ -112,6 +115,10 @@ async function getAllDraftData(currentLeagueId: string): Promise<SeasonDraftData
       )
     ),
     getAllPlayers(),
+    // Every season's moves, to credit picks the draft board misattributes
+    Promise.all(
+      leagueChain.map(l => getAllSeasonTransactions(l.league_id).catch(() => []))
+    ).then(seasons => seasons.flat()),
   ]);
 
   for (const league of leagueChain) {
@@ -126,7 +133,32 @@ async function getAllDraftData(currentLeagueId: string): Promise<SeasonDraftData
         if (draft.status !== 'complete') continue;
 
         try {
-          const picks = await getDraftPicks(draft.draft_id);
+          // Sleeper's board can credit a pick to the slot's former owner
+          // when pick trades involved a manager who has since left; the
+          // players' own transaction history says who really drafted them
+          const [boardPicks, tradedPicks] = await Promise.all([
+            getDraftPicks(draft.draft_id),
+            getDraftTradedPicks(draft.draft_id).catch(() => []),
+          ]);
+          const drafters = resolveDraftedRosters(
+            boardPicks,
+            draft.start_time || draft.created,
+            chainTransactions,
+            rosters
+          );
+          const picks = boardPicks.map(pick => ({
+            ...pick,
+            roster_id: drafters.get(pick.pick_no) ?? pick.roster_id,
+          }));
+          // The same problem can map slots to the wrong original owner
+          const correctedDraft: SleeperDraft = {
+            ...draft,
+            slot_to_roster_id: correctSlotOwners(
+              draft.slot_to_roster_id || {},
+              picks.map(p => ({ draft_slot: p.draft_slot, round: p.round, drafter: p.roster_id })),
+              tradedPicks
+            ),
+          };
 
           // Judge each pick against what its slot typically produced in
           // this same draft class
@@ -199,7 +231,7 @@ async function getAllDraftData(currentLeagueId: string): Promise<SeasonDraftData
 
           allDraftData.push({
             season: draft.season,
-            draft,
+            draft: correctedDraft,
             picks: picksWithValues,
             managerStats,
             users,
@@ -777,14 +809,19 @@ function DraftBoard({
   rosters: SleeperRoster[];
   draft: SleeperDraft;
 }) {
-  // Build team names by slot
-  const slotToTeam = new Map<number, string>();
-
-  for (const [slot, rosterId] of Object.entries(draft.slot_to_roster_id || {})) {
+  const teamNameFor = (rosterId: number) => {
     const roster = rosters.find(r => r.roster_id === rosterId);
     const user = roster ? getUserByOwnerId(users, roster.owner_id) : null;
-    const teamName = getTeamName(user, rosterId);
-    slotToTeam.set(parseInt(slot), teamName);
+    return getTeamName(user, rosterId);
+  };
+
+  // Build team names by slot
+  const slotToTeam = new Map<number, string>();
+  const slotToRoster = new Map<number, number>();
+
+  for (const [slot, rosterId] of Object.entries(draft.slot_to_roster_id || {})) {
+    slotToTeam.set(parseInt(slot), teamNameFor(rosterId));
+    slotToRoster.set(parseInt(slot), rosterId);
   }
 
   // Organize picks into grid
@@ -835,6 +872,12 @@ function DraftBoard({
                   <p className="text-white font-medium truncate text-[11px]" title={pick.playerName}>
                     {pick.playerName}
                   </p>
+                  {/* Traded picks: who actually made the selection */}
+                  {slotToRoster.has(pick.draft_slot) && slotToRoster.get(pick.draft_slot) !== pick.roster_id && (
+                    <p className="text-gray-400 truncate text-[10px]" title={`Drafted by ${teamNameFor(pick.roster_id)}`}>
+                      → {teamNameFor(pick.roster_id)}
+                    </p>
+                  )}
                   <div className="flex justify-between items-center">
                     <span className={`${getPositionTextColor(pick.metadata?.position || '')} text-[10px]`}>
                       {pick.metadata?.position}

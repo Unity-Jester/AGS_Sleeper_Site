@@ -1,4 +1,4 @@
-import { SleeperMatchup } from './types';
+import { PlayoffMatchup, SleeperMatchup } from './types';
 
 // ---------------------------------------------------------------------------
 // Scoring model estimation
@@ -84,6 +84,14 @@ export interface SimulationInput {
   // Remaining regular-season weeks as roster-id pairings
   remainingWeeks: [number, number][][];
   playoffTeams: number;
+  // League plays the weekly median too: top half of scores get a win
+  medianGames?: boolean;
+  // Weeks per playoff round (two-week rounds sum both weeks' scores);
+  // defaults to one week each
+  roundLengths?: number[];
+  // The real winners bracket once seeds are set: decided games are kept,
+  // the rest simulated. Without it, a fixed bracket is built from seeds.
+  bracket?: PlayoffMatchup[];
   sims?: number;
   seed?: number;
 }
@@ -91,7 +99,7 @@ export interface SimulationInput {
 export interface TeamOdds {
   rosterId: number;
   playoffPct: number;
-  byePct: number; // top-2 seed (only meaningful for 6-team playoffs)
+  byePct: number; // seeded into round 2 (byes exist when the field isn't a power of two)
   titlePct: number;
   avgSeed: number | null; // average seed in sims where the team made it
   projectedWins: number;
@@ -119,35 +127,70 @@ function makeNormal(rand: () => number) {
   };
 }
 
-// Single-elimination bracket among seeded teams: extremes pair off
-// (1 v N, 2 v N-1, ...), odd counts give the top remaining seed a bye.
-// Matches Sleeper's default 4-team bracket and approximates 6-team.
-function simulateBracket(
-  seeds: number[],
-  models: Map<number, TeamScoringModel>,
-  normal: (mean: number, std: number) => number
-): number {
-  let alive = [...seeds];
+// Seed order of a standard fixed bracket: 1v8, 4v5, 2v7, 3v6 for eight
+// slots, so the top seed meets the 4/5 winner. Slots seeded beyond the
+// field are byes for their opponent. This is Sleeper's bracket.
+export function bracketSlots(size: number): number[] {
+  let slots = [1];
+  while (slots.length < size) {
+    const n = slots.length * 2;
+    slots = slots.flatMap(seed => [seed, n + 1 - seed]);
+  }
+  return slots;
+}
+
+// Number of top seeds that skip the first round
+export function playoffByes(playoffTeams: number): number {
+  if (playoffTeams < 2) return 0;
+  const size = 2 ** Math.ceil(Math.log2(playoffTeams));
+  return size - playoffTeams;
+}
+
+type GameSim = (a: number, b: number, round: number) => number;
+
+// Fixed bracket from seeds (no reseeding)
+function simulateBracket(seeds: number[], playGame: GameSim): number {
+  if (seeds.length === 0) return -1;
+  const size = 2 ** Math.ceil(Math.log2(Math.max(seeds.length, 1)));
+  let alive: (number | null)[] = bracketSlots(size).map(seed => seeds[seed - 1] ?? null);
+  let round = 1;
   while (alive.length > 1) {
-    const next: number[] = [];
-    let lo = 0;
-    let hi = alive.length - 1;
-    if (alive.length % 2 === 1) {
-      next.push(alive[0]); // bye for top seed
-      lo = 1;
-    }
-    while (lo < hi) {
-      const a = alive[lo];
-      const b = alive[hi];
-      const ma = models.get(a)!;
-      const mb = models.get(b)!;
-      next.push(normal(ma.mean, ma.std) >= normal(mb.mean, mb.std) ? a : b);
-      lo++;
-      hi--;
+    const next: (number | null)[] = [];
+    for (let i = 0; i < alive.length; i += 2) {
+      const a = alive[i];
+      const b = alive[i + 1];
+      next.push(a === null ? b : b === null ? a : playGame(a, b, round));
     }
     alive = next;
+    round++;
   }
-  return alive[0];
+  return alive[0] ?? -1;
+}
+
+// The league's real winners bracket: decided games stand, undecided ones
+// are simulated in round order; the champion wins the p=1 game
+function simulateKnownBracket(bracket: PlayoffMatchup[], playGame: GameSim): number {
+  const games = [...bracket].sort((x, y) => (x.r ?? x.round ?? 0) - (y.r ?? y.round ?? 0));
+  const winner = new Map<number, number>();
+  const loser = new Map<number, number>();
+  const resolve = (team: number | null | undefined, from: { w?: number; l?: number } | undefined) =>
+    team ?? (from?.w !== undefined ? winner.get(from.w) : from?.l !== undefined ? loser.get(from.l) : undefined);
+
+  let champion = -1;
+  for (const g of games) {
+    const id = g.m ?? g.matchup_id;
+    if (id === undefined) continue;
+    const ext = g as PlayoffMatchup & { t1_from?: { w?: number; l?: number }; t2_from?: { w?: number; l?: number } };
+    const a = resolve(g.t1 ?? g.team_1_roster_id, ext.t1_from ?? g.team_1_from);
+    const b = resolve(g.t2 ?? g.team_2_roster_id, ext.t2_from ?? g.team_2_from);
+    if (a === undefined || b === undefined) continue;
+    const decided = g.w ?? g.winner_roster_id;
+    const w = decided ?? playGame(a, b, g.r ?? g.round ?? 1);
+    winner.set(id, w);
+    loser.set(id, w === a ? b : a);
+    if (g.p === 1) champion = w;
+  }
+  return champion;
 }
 
 export function simulateSeason(input: SimulationInput): TeamOdds[] {
@@ -169,21 +212,45 @@ export function simulateSeason(input: SimulationInput): TeamOdds[] {
     winSum.set(id, 0);
   }
 
+  const byes = playoffByes(input.playoffTeams);
+  const score = (id: number) => {
+    const m = input.models.get(id);
+    return m ? normal(m.mean, m.std) : 0;
+  };
+  // A playoff game over the round's weeks (two-week rounds sum both)
+  const playGame: GameSim = (a, b, round) => {
+    const legs = input.roundLengths?.[round - 1] ?? 1;
+    let sa = 0;
+    let sb = 0;
+    for (let i = 0; i < legs; i++) {
+      sa += score(a);
+      sb += score(b);
+    }
+    return sa >= sb ? a : b;
+  };
+
   for (let s = 0; s < sims; s++) {
     const wins = new Map(input.standings.map(t => [t.rosterId, t.wins + t.ties / 2]));
     const pf = new Map(input.standings.map(t => [t.rosterId, t.pointsFor]));
 
     for (const week of input.remainingWeeks) {
+      const weekScores: [number, number][] = [];
       for (const [a, b] of week) {
-        const ma = input.models.get(a);
-        const mb = input.models.get(b);
-        if (!ma || !mb) continue;
-        const sa = normal(ma.mean, ma.std);
-        const sb = normal(mb.mean, mb.std);
+        if (!input.models.has(a) || !input.models.has(b)) continue;
+        const sa = score(a);
+        const sb = score(b);
+        weekScores.push([a, sa], [b, sb]);
         pf.set(a, (pf.get(a) || 0) + sa);
         pf.set(b, (pf.get(b) || 0) + sb);
         if (sa >= sb) wins.set(a, (wins.get(a) || 0) + 1);
         else wins.set(b, (wins.get(b) || 0) + 1);
+      }
+      // Median game: the top half of the week's scores each get a win
+      if (input.medianGames && weekScores.length > 1) {
+        weekScores.sort((x, y) => y[1] - x[1]);
+        for (const [id] of weekScores.slice(0, Math.floor(weekScores.length / 2))) {
+          wins.set(id, (wins.get(id) || 0) + 1);
+        }
       }
     }
 
@@ -195,13 +262,15 @@ export function simulateSeason(input: SimulationInput): TeamOdds[] {
     seeds.forEach((id, idx) => {
       playoffCount.set(id, playoffCount.get(id)! + 1);
       seedSum.set(id, seedSum.get(id)! + idx + 1);
-      if (idx < 2 && input.playoffTeams >= 6) {
+      if (idx < byes) {
         byeCount.set(id, byeCount.get(id)! + 1);
       }
     });
 
-    const champion = simulateBracket(seeds, input.models, normal);
-    titleCount.set(champion, titleCount.get(champion)! + 1);
+    const champion = input.bracket?.length
+      ? simulateKnownBracket(input.bracket, playGame)
+      : simulateBracket(seeds, playGame);
+    if (titleCount.has(champion)) titleCount.set(champion, titleCount.get(champion)! + 1);
 
     for (const id of rosterIds) {
       winSum.set(id, winSum.get(id)! + wins.get(id)!);

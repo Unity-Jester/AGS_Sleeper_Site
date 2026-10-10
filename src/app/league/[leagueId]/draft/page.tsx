@@ -11,14 +11,10 @@ import {
   getLeagueHistory,
 } from '@/lib/sleeper';
 import { fetchFantasyCalcValues } from '@/lib/rankings';
-import {
-  fetchHistoricalValues,
-  buildPlayerNameMapping,
-} from '@/lib/historicalValues';
-import { resolveDraftPickValue, findStartupDraftId } from '@/lib/draftValues';
+import { findStartupDraftId, fitDraftSlotValues } from '@/lib/draftValues';
 import { ordinalSuffix, getPositionTextColor, getTeamName } from '@/lib/utils';
 import Image from 'next/image';
-import { SleeperDraft, SleeperDraftPick, SleeperUser, SleeperRoster, SleeperPlayersMap } from '@/lib/types';
+import { SleeperDraft, SleeperDraftPick, SleeperUser, SleeperRoster, FantasyCalcSettings } from '@/lib/types';
 import CollapsibleSection from '@/components/CollapsibleSection';
 import ErrorState from '@/components/ErrorState';
 import DraftPicksExplorer, { ExplorerManager, ExplorerPick } from '@/components/DraftPicksExplorer';
@@ -27,8 +23,11 @@ export const revalidate = 300; // Revalidate every 5 minutes
 
 interface DraftPickWithValue extends SleeperDraftPick {
   currentValue: number;
-  pickValue: number;
+  // What this slot typically produced in the same draft class
+  expectedValue: number;
   valueDiff: number;
+  // The draft class's typical miss from expected, used for grading
+  sigma: number;
   playerName: string;
 }
 
@@ -38,7 +37,7 @@ interface ManagerDraftStats {
   teamName: string;
   avatar: string | null;
   picks: DraftPickWithValue[];
-  totalPickValue: number;
+  totalExpectedValue: number;
   totalCurrentValue: number;
   totalValueDiff: number;
   bestPick: DraftPickWithValue | null;
@@ -65,7 +64,7 @@ interface OverallManagerStats {
   teamName: string;
   avatar: string | null;
   totalPicks: number;
-  totalPickValue: number;
+  totalExpectedValue: number;
   totalCurrentValue: number;
   totalValueDiff: number;
   draftsParticipated: number;
@@ -74,31 +73,46 @@ interface OverallManagerStats {
   worstPick: OverallPickWithSeason | null;
 }
 
-// Determine pick tier (early, mid, late) based on position in round
-function getPickTier(pickInRound: number, numTeams: number): 'Early' | 'Mid' | 'Late' {
-  const third = numTeams / 3;
-  if (pickInRound <= third) {
-    return 'Early';
-  } else if (pickInRound <= third * 2) {
-    return 'Mid';
-  } else {
-    return 'Late';
-  }
+// Derive fantasy calc settings from Sleeper league data
+function deriveLeagueSettings(
+  rosterPositions: string[],
+  scoringSettings: Record<string, number>,
+  totalRosters: number
+): FantasyCalcSettings {
+  // Count QB positions (QB + SUPER_FLEX)
+  const qbCount = rosterPositions.filter(
+    pos => pos === 'QB' || pos === 'SUPER_FLEX'
+  ).length;
+  const numQbs: 1 | 2 = qbCount >= 2 ? 2 : 1;
+
+  // Get PPR setting (0, 0.5, or 1)
+  const recValue = scoringSettings?.rec ?? 1;
+  const ppr: 0 | 0.5 | 1 = recValue === 0 ? 0 : recValue === 0.5 ? 0.5 : 1;
+
+  return {
+    numQbs,
+    ppr,
+    numTeams: totalRosters || 12,
+  };
 }
 
 async function getAllDraftData(currentLeagueId: string): Promise<SeasonDraftData[]> {
   const allDraftData: SeasonDraftData[] = [];
   const leagueChain = await getLeagueHistory(currentLeagueId);
+  const currentLeague = leagueChain[0];
 
-  // Fetch player values and historical data
-  const [{ playerValues: fcPlayerValues, pickValues: fcPickValues }, players, historicalData] = await Promise.all([
-    fetchFantasyCalcValues(),
+  // Every player is valued on the current league's FantasyCalc market so
+  // all picks share one scale
+  const [{ playerValues }, players] = await Promise.all([
+    fetchFantasyCalcValues(
+      deriveLeagueSettings(
+        currentLeague.roster_positions || [],
+        currentLeague.scoring_settings || {},
+        currentLeague.total_rosters
+      )
+    ),
     getAllPlayers(),
-    fetchHistoricalValues(),
   ]);
-
-  // Build player name mapping for historical data lookup
-  const playerMapping = buildPlayerNameMapping(players, historicalData.playerColumns);
 
   for (const league of leagueChain) {
     try {
@@ -113,39 +127,26 @@ async function getAllDraftData(currentLeagueId: string): Promise<SeasonDraftData
 
         try {
           const picks = await getDraftPicks(draft.draft_id);
-          const numTeams = draft.settings.teams || 12;
-          const draftTime = draft.start_time || draft.created;
 
-          // Process picks with values from historical data
-          const picksWithValues: DraftPickWithValue[] = picks.map(pick => {
+          // Judge each pick against what its slot typically produced in
+          // this same draft class
+          const currentValues = picks.map(pick => playerValues.get(pick.player_id) ?? 0);
+          const { expected, sigma } = fitDraftSlotValues(
+            picks.map((pick, i) => ({ pickNo: pick.pick_no, currentValue: currentValues[i] }))
+          );
+
+          const picksWithValues: DraftPickWithValue[] = picks.map((pick, i) => {
             const player = players[pick.player_id];
             const playerName = pick.metadata?.first_name && pick.metadata?.last_name
               ? `${pick.metadata.first_name} ${pick.metadata.last_name}`
               : player?.full_name || pick.player_id;
 
-            // Calculate pick position within round for tier determination
-            const pickInRound = ((pick.pick_no - 1) % numTeams) + 1;
-            const tier = getPickTier(pickInRound, numTeams);
-
-            // Pick cost and player value resolved from a single source so
-            // the diff never compares two different market scales
-            const { pickValue, currentValue } = resolveDraftPickValue(
-              {
-                season: draft.season,
-                round: pick.round,
-                pickInRound,
-                tier,
-                draftTime,
-                playerId: pick.player_id,
-              },
-              { historicalData, playerMapping, fcPlayerValues, fcPickValues }
-            );
-
             return {
               ...pick,
-              currentValue,
-              pickValue,
-              valueDiff: currentValue - pickValue,
+              currentValue: currentValues[i],
+              expectedValue: expected[i],
+              valueDiff: currentValues[i] - expected[i],
+              sigma,
               playerName,
             };
           });
@@ -164,7 +165,7 @@ async function getAllDraftData(currentLeagueId: string): Promise<SeasonDraftData
                 teamName: getTeamName(user, pick.roster_id),
                 avatar: user?.avatar || null,
                 picks: [],
-                totalPickValue: 0,
+                totalExpectedValue: 0,
                 totalCurrentValue: 0,
                 totalValueDiff: 0,
                 bestPick: null,
@@ -175,7 +176,7 @@ async function getAllDraftData(currentLeagueId: string): Promise<SeasonDraftData
 
             const stats = managerStatsMap.get(pick.roster_id)!;
             stats.picks.push(pick);
-            stats.totalPickValue += pick.pickValue;
+            stats.totalExpectedValue += pick.expectedValue;
             stats.totalCurrentValue += pick.currentValue;
             stats.totalValueDiff += pick.valueDiff;
 
@@ -263,7 +264,8 @@ function buildExplorerData(
           playerId: pick.player_id,
           playerName: pick.playerName,
           position: pick.metadata?.position || '',
-          pickValue: pick.pickValue,
+          expectedValue: pick.expectedValue,
+          sigma: pick.sigma,
           currentValue: pick.currentValue,
           valueDiff: pick.valueDiff,
         });
@@ -293,7 +295,7 @@ function calculateOverallStats(draftData: SeasonDraftData[]): OverallManagerStat
 
       if (existing) {
         existing.totalPicks += manager.picks.length;
-        existing.totalPickValue += manager.totalPickValue;
+        existing.totalExpectedValue += manager.totalExpectedValue;
         existing.totalCurrentValue += manager.totalCurrentValue;
         existing.totalValueDiff += manager.totalValueDiff;
         existing.draftsParticipated += 1;
@@ -319,7 +321,7 @@ function calculateOverallStats(draftData: SeasonDraftData[]): OverallManagerStat
           teamName: manager.teamName,
           avatar: manager.avatar,
           totalPicks: manager.picks.length,
-          totalPickValue: manager.totalPickValue,
+          totalExpectedValue: manager.totalExpectedValue,
           totalCurrentValue: manager.totalCurrentValue,
           totalValueDiff: manager.totalValueDiff,
           draftsParticipated: 1,
@@ -399,6 +401,10 @@ export default async function DraftPage({ params }: LeaguePageProps) {
           <p className="text-gray-400 mt-1">
             {scoredDrafts.length} draft{scoredDrafts.length !== 1 ? 's' : ''} analyzed
             {startupDraft && ` · ${startupDraft.season} startup draft excluded from scoring`}
+          </p>
+          <p className="text-sm text-gray-500 mt-1">
+            Each pick is scored on the player&apos;s value today against what that draft slot
+            typically produced in the same class, so every draft averages out to zero.
           </p>
         </div>
 
@@ -563,7 +569,7 @@ export default async function DraftPage({ params }: LeaguePageProps) {
           <CollapsibleSection
             key={seasonData.draft.draft_id}
             title={`${seasonData.season} Draft Rankings`}
-            subtitle="Ranked by total value gained (current value - pick value at time)"
+            subtitle="Ranked by total value over what each draft slot typically produced"
             defaultOpen={false}
           >
             {seasonData.managerStats.map((manager, idx) => (
@@ -732,7 +738,7 @@ export default async function DraftPage({ params }: LeaguePageProps) {
                           {pick.valueDiff >= 0 ? '+' : ''}{formatValue(pick.valueDiff)}
                         </p>
                         <p className="text-xs text-gray-500">
-                          {formatValue(pick.pickValue)} → {formatValue(pick.currentValue)}
+                          Slot {formatValue(pick.expectedValue)} → {formatValue(pick.currentValue)}
                         </p>
                       </div>
                     </div>

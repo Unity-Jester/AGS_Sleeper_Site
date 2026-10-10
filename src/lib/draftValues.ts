@@ -1,104 +1,17 @@
-import {
-  HistoricalValueData,
-  getHistoricalPickValue,
-  getCurrentPlayerValue,
-} from './historicalValues';
-import { pickRoundLabel } from './utils';
-
-export interface DraftPickValueSources {
-  historicalData: HistoricalValueData;
-  playerMapping: Map<string, string>;
-  fcPlayerValues: Map<string, number>;
-  fcPickValues: Map<string, number>;
-}
-
-export interface ResolvedPickValue {
-  pickValue: number;
-  currentValue: number;
-  source: 'sheet' | 'fantasycalc' | 'estimate';
-}
-
-// Legacy fallback when no source prices the pick
-function estimatePickValue(round: number): number {
-  const values: Record<number, number> = {
-    1: 7000,
-    2: 4000,
-    3: 2000,
-    4: 1000,
-    5: 500,
-  };
-  return values[round] || 250;
-}
-
-// Resolve a drafted pick's cost and the drafted player's current value.
+// Draft scoring.
 //
-// The invariant here is that BOTH numbers come from the same market.
-// Pick values from the historical sheet compared against player values
-// from FantasyCalc (or vice versa) are different scales, which made a
-// fresh rookie class look like a board full of busts: the sheet doesn't
-// track new rookies, so their current values fell back to FantasyCalc
-// while pick costs stayed on the sheet's pricier generic buckets.
-export function resolveDraftPickValue(
-  args: {
-    season: string;
-    round: number;
-    pickInRound: number;
-    tier: 'Early' | 'Mid' | 'Late';
-    draftTime: number;
-    playerId: string;
-  },
-  sources: DraftPickValueSources
-): ResolvedPickValue {
-  const sheetCurrent = getCurrentPlayerValue(
-    args.playerId,
-    sources.historicalData,
-    sources.playerMapping
-  );
-
-  // Player tracked by the sheet: price the pick on the sheet too
-  if (sheetCurrent != null && sheetCurrent > 0) {
-    const sheetPick = getHistoricalPickValue(
-      args.season,
-      args.round,
-      args.draftTime,
-      sources.historicalData,
-      args.tier
-    );
-    if (sheetPick != null && sheetPick > 0) {
-      return { pickValue: sheetPick, currentValue: sheetCurrent, source: 'sheet' };
-    }
-    // Sheet knows the player but has no pick columns for this season
-    // (pre-2024 drafts): fall back to the legacy estimate scale.
-    return {
-      pickValue: estimatePickValue(args.round),
-      currentValue: sheetCurrent,
-      source: 'estimate',
-    };
-  }
-
-  // Player unknown to the sheet (typically a fresh rookie class): stay
-  // entirely inside FantasyCalc. Prefer the exact slot ("2026 Pick 1.07"),
-  // then the generic round ("2026 1st").
-  const fcCurrent = sources.fcPlayerValues.get(args.playerId) ?? 0;
-  const slotKey = `${args.season} Pick ${args.round}.${String(args.pickInRound).padStart(2, '0')}`;
-  const roundKey = `${args.season} ${pickRoundLabel(args.round)}`;
-  const fcPick = sources.fcPickValues.get(slotKey) ?? sources.fcPickValues.get(roundKey);
-
-  if (fcPick != null && fcPick > 0) {
-    return { pickValue: fcPick, currentValue: fcCurrent, source: 'fantasycalc' };
-  }
-
-  return {
-    pickValue: estimatePickValue(args.round),
-    currentValue: fcCurrent,
-    source: 'estimate',
-  };
-}
+// A pick is judged against what that draft slot typically produced in the
+// same draft class, not against the pick's market price on draft day.
+// Pricing picks on draft day mixed scales (sheet pick prices, flat legacy
+// estimates, FantasyCalc player values) and charged every pick the
+// rookie-hype premium, so nearly every pick in the league scored negative.
+// Comparing players from the same class on one market (FantasyCalc, now)
+// keeps the scale consistent and centers each draft on zero.
 
 // The league's startup draft is its first completed draft, unless that
 // draft was rookies-only (player_type 1), which means rosters were
-// imported and the league never held a startup. Startup picks are priced
-// against rookie-pick values they were never traded at, so they're left
+// imported and the league never held a startup. Startup picks are drafted
+// on a different curve (veterans and rookies together), so they're left
 // out of draft scoring.
 export function findStartupDraftId(
   drafts: Array<{
@@ -115,29 +28,69 @@ export function findStartupDraftId(
   return first.settings?.player_type === 1 ? null : first.draft_id;
 }
 
+export interface DraftSlotFit {
+  // Expected current value for each pick, in the order given
+  expected: number[];
+  // Typical miss from the expected value in this draft; scales grades so a
+  // whiffed 4th-rounder costs far less than a whiffed 1.01
+  sigma: number;
+}
+
+// Fit expected value by slot for one draft class: value ≈ a + b·ln(pick_no),
+// least squares over the class's current values, floored at zero.
+export function fitDraftSlotValues(
+  picks: Array<{ pickNo: number; currentValue: number }>
+): DraftSlotFit {
+  const n = picks.length;
+  if (n === 0) return { expected: [], sigma: 1 };
+
+  const xs = picks.map(p => Math.log(Math.max(1, p.pickNo)));
+  const ys = picks.map(p => p.currentValue);
+  const meanX = xs.reduce((s, x) => s + x, 0) / n;
+  const meanY = ys.reduce((s, y) => s + y, 0) / n;
+
+  let sxy = 0;
+  let sxx = 0;
+  for (let i = 0; i < n; i++) {
+    sxy += (xs[i] - meanX) * (ys[i] - meanY);
+    sxx += (xs[i] - meanX) ** 2;
+  }
+  const slope = sxx > 0 ? sxy / sxx : 0;
+  const intercept = meanY - slope * meanX;
+
+  const expected = xs.map(x => Math.max(0, Math.round(intercept + slope * x)));
+  const sigma = Math.sqrt(ys.reduce((s, y, i) => s + (y - expected[i]) ** 2, 0) / n) || 1;
+
+  return { expected, sigma };
+}
+
 export type DraftGrade = 'A+' | 'A' | 'A-' | 'B+' | 'B' | 'B-' | 'C+' | 'C' | 'C-' | 'D' | 'F';
 
+// Minimum score (value over expected, in units of the draft's typical
+// miss) for each grade; an average pick lands at B-
 const GRADE_THRESHOLDS: Array<[number, DraftGrade]> = [
-  [2.0, 'A+'],
-  [1.6, 'A'],
-  [1.3, 'A-'],
-  [1.15, 'B+'],
-  [1.0, 'B'],
-  [0.85, 'B-'],
-  [0.7, 'C+'],
-  [0.55, 'C'],
-  [0.4, 'C-'],
-  [0.25, 'D'],
+  [1.5, 'A+'],
+  [1.0, 'A'],
+  [0.65, 'A-'],
+  [0.35, 'B+'],
+  [0.1, 'B'],
+  [-0.1, 'B-'],
+  [-0.35, 'C+'],
+  [-0.65, 'C'],
+  [-1.0, 'C-'],
+  [-1.5, 'D'],
 ];
 
-// Letter grade from the return on the pick: what the player is worth now
-// relative to what the pick cost. Works the same for a single pick or a
-// manager's whole class (pass the totals).
-export function gradeDraftValue(pickValue: number, currentValue: number): DraftGrade {
-  if (pickValue <= 0) return currentValue > 0 ? 'A+' : 'C';
-  const ratio = currentValue / pickValue;
+// Letter grade for one pick or a group of picks (a manager's class, or
+// every pick they've made). Summed value over expected is scaled by the
+// combined spread of those picks, so a long run of small wins and one big
+// hit are weighed on the same footing.
+export function gradeDraftPicks(picks: Array<{ valueDiff: number; sigma: number }>): DraftGrade {
+  const diff = picks.reduce((s, p) => s + p.valueDiff, 0);
+  const spread = Math.sqrt(picks.reduce((s, p) => s + p.sigma ** 2, 0));
+  const score = spread > 0 ? diff / spread : 0;
   for (const [min, grade] of GRADE_THRESHOLDS) {
-    if (ratio >= min) return grade;
+    if (score >= min) return grade;
   }
   return 'F';
 }

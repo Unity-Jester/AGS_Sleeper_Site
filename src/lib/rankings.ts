@@ -1,7 +1,7 @@
 // Power Rankings from external sources
 import { FantasyCalcSettings, DraftPickSelection, TradeCalculation, TradeSide } from './types';
-import { isFairTrade } from './tradeCalculator';
-import { parseCSVLine, normalizePlayerName, pickRoundLabel } from './utils';
+import { isFairTrade, buildOwnedPicks, tieredPickValue, DEFAULT_TIER_RATIOS, TradedPickRecord } from './tradeCalculator';
+import { parseCSVLine, normalizePlayerName, pickRoundLabel, getTeamName } from './utils';
 
 export interface TeamPowerRanking {
   rank: number;
@@ -158,7 +158,8 @@ export function calculateTradeValue(
 }
 
 // Fetch DynastyProcess values (aggregated from multiple sources)
-export async function fetchDynastyProcessValues(): Promise<Map<string, number>> {
+// numQbs 2 reads the superflex column (value_2qb) instead of value_1qb
+export async function fetchDynastyProcessValues(numQbs: 1 | 2 = 1): Promise<Map<string, number>> {
   try {
     const response = await fetch(
       'https://raw.githubusercontent.com/dynastyprocess/data/master/files/values.csv',
@@ -183,9 +184,9 @@ export async function fetchDynastyProcessValues(): Promise<Map<string, number>> 
 
       // Parse CSV with quoted fields
       const fields = parseCSVLine(line);
-      if (fields.length >= 9) {
+      if (fields.length >= 10) {
         const playerName = fields[0];
-        const value = parseInt(fields[8]) || 0; // value_1qb column
+        const value = parseInt(fields[numQbs === 2 ? 9 : 8]) || 0; // value_2qb / value_1qb
 
         if (playerName && value > 0) {
           // Store by normalized player name for matching
@@ -204,19 +205,21 @@ export async function fetchDynastyProcessValues(): Promise<Map<string, number>> 
 // Calculate team power rankings
 export function calculatePowerRankings(
   rosters: { roster_id: number; owner_id: string; players: string[] | null }[],
-  users: { user_id: string; display_name: string; username: string }[],
+  users: { user_id: string; display_name: string; username: string; metadata?: { team_name?: string } }[],
   playerValues: Map<string, number> | null | undefined,
   playerNames: Map<string, string>,
-  matchByName: boolean = false
+  matchByName: boolean = false,
+  // Value added on top of the roster, e.g. owned future picks
+  extraValueByRoster?: Map<number, number>
 ): TeamPowerRanking[] {
   const rankings: TeamPowerRanking[] = [];
   const safePlayerValues = playerValues || new Map<string, number>();
 
   for (const roster of rosters) {
     const user = users.find(u => u.user_id === roster.owner_id);
-    const teamName = user?.display_name || user?.username || `Team ${roster.roster_id}`;
+    const teamName = getTeamName(user as Parameters<typeof getTeamName>[0], roster.roster_id);
 
-    let totalValue = 0;
+    let totalValue = extraValueByRoster?.get(roster.roster_id) ?? 0;
     const playerValueList: { id: string; name: string; value: number }[] = [];
 
     for (const playerId of roster.players || []) {
@@ -264,4 +267,21 @@ export function calculatePowerRankings(
   });
 
   return rankings;
+}
+
+// Value of the future picks each team holds: its own picks plus traded
+// ones, each priced as a generic (mid) pick of its round
+export function ownedPickValueByRoster(
+  rosterIds: number[],
+  tradedPicks: TradedPickRecord[],
+  pickValues: Record<string, number>,
+  rounds: number
+): Map<number, number> {
+  const seasons = getDraftPickOptions(pickValues).seasons;
+  const totals = new Map<number, number>(rosterIds.map(id => [id, 0]));
+  for (const pick of buildOwnedPicks(rosterIds, tradedPicks, seasons, rounds)) {
+    const value = tieredPickValue(pick.season, pick.round, 'Mid', pickValues, DEFAULT_TIER_RATIOS);
+    totals.set(pick.ownerRosterId, (totals.get(pick.ownerRosterId) ?? 0) + value);
+  }
+  return totals;
 }

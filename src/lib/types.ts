@@ -54,6 +54,8 @@ export interface LeagueSettings {
   playoff_teams: number;
   playoff_seed_type: number;
   playoff_round_type: number;
+  // 1 = each team also plays the league median every week
+  league_average_match?: number;
   pick_trading: number;
   offseason_adds: number;
   num_teams: number;
@@ -120,6 +122,8 @@ export interface SleeperTransaction {
   waiver_budget: WaiverBudget[];
   settings: TransactionSettings | null;
   created: number;
+  // When the transaction processed (waivers run after they're claimed)
+  status_updated?: number;
   creator: string;
   consenter_ids: number[];
   leg: number;

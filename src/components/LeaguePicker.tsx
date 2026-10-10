@@ -8,6 +8,7 @@ interface FoundLeague {
   name: string;
   season: string;
   total_rosters: number;
+  previous_league_id?: string | null;
 }
 
 const SLEEPER_API_BASE = 'https://api.sleeper.app/v1';
@@ -37,17 +38,24 @@ export default function LeaguePicker() {
     const value = input.trim();
     if (!value) return;
 
-    // Pure digits = league ID
-    if (/^\d+$/.test(value)) {
-      openLeague(value);
-      return;
-    }
-
-    // Otherwise treat as a Sleeper username
     setLoading(true);
     setError(null);
     setLeagues(null);
     try {
+      // Pure digits = league ID. Check it exists before remembering it, or
+      // a typo would send every later visit to an error page.
+      if (/^\d+$/.test(value)) {
+        const res = await fetch(`${SLEEPER_API_BASE}/league/${value}`);
+        const league = res.ok ? await res.json() : null;
+        if (!league?.league_id) {
+          setError(`No Sleeper league with ID ${value}.`);
+          return;
+        }
+        openLeague(value);
+        return;
+      }
+
+      // Otherwise treat as a Sleeper username
       const userRes = await fetch(`${SLEEPER_API_BASE}/user/${encodeURIComponent(value)}`);
       const user = userRes.ok ? await userRes.json() : null;
       if (!user?.user_id) {
@@ -55,18 +63,20 @@ export default function LeaguePicker() {
         return;
       }
 
+      // Both seasons: early in a new year only some leagues have renewed.
+      // A renewed league replaces its previous season's entry.
       const year = new Date().getFullYear();
-      let found: FoundLeague[] = [];
-      for (const season of [year, year - 1]) {
-        const res = await fetch(`${SLEEPER_API_BASE}/user/${user.user_id}/leagues/nfl/${season}`);
-        if (res.ok) {
-          const data: FoundLeague[] = await res.json();
-          if (data?.length) {
-            found = data;
-            break;
-          }
-        }
-      }
+      const bySeason = await Promise.all(
+        [year, year - 1].map(async season => {
+          const res = await fetch(`${SLEEPER_API_BASE}/user/${user.user_id}/leagues/nfl/${season}`);
+          return res.ok ? ((await res.json()) as FoundLeague[] | null) ?? [] : [];
+        })
+      );
+      const renewed = new Set(bySeason[0].map(l => l.previous_league_id).filter(Boolean));
+      const found: FoundLeague[] = [
+        ...bySeason[0],
+        ...bySeason[1].filter(l => !renewed.has(l.league_id)),
+      ];
 
       if (found.length === 0) {
         setError(`"${value}" has no NFL leagues in ${year} or ${year - 1}.`);

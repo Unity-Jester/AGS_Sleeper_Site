@@ -1,11 +1,13 @@
 interface ErrorStateProps {
   title: string;
   detail?: string;
+  // A way out when retrying won't help, e.g. back to the league picker
+  action?: { href: string; label: string };
 }
 
 // Shared error UI for server pages: what went wrong plus a way to retry
 // without hunting for the browser reload button.
-export default function ErrorState({ title, detail }: ErrorStateProps) {
+export default function ErrorState({ title, detail, action }: ErrorStateProps) {
   return (
     <div className="text-center py-12">
       <h1 className="text-2xl font-bold text-sleeper-red mb-4">{title}</h1>
@@ -19,6 +21,14 @@ export default function ErrorState({ title, detail }: ErrorStateProps) {
       >
         Try Again
       </a>
+      {action && (
+        <a
+          href={action.href}
+          className="inline-block mt-6 ml-3 px-4 py-2 border border-gray-700 text-gray-300 font-medium rounded-lg hover:text-white transition-colors"
+        >
+          {action.label}
+        </a>
+      )}
     </div>
   );
 }

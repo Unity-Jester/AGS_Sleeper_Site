@@ -14,9 +14,16 @@ interface MatchupProps {
   players?: SleeperPlayersMap;
   showStarters?: boolean;
   h2hRecord?: H2HRecord | null;
+  // Playoff game name, e.g. "Championship (Wk 2)"
+  label?: string | null;
+  // Running totals across a two-week playoff round
+  aggregate?: { team1: number; team2: number } | null;
 }
 
-export default function Matchup({ matchup, players, showStarters = false, h2hRecord }: MatchupProps) {
+// Sleeper fills an empty starter slot with '0'
+const EMPTY_SLOT = '0';
+
+export default function Matchup({ matchup, players, showStarters = false, h2hRecord, label, aggregate }: MatchupProps) {
   const { team1, team2 } = matchup;
   const team1Winning = team1.points > team2.points;
   const team2Winning = team2.points > team1.points;
@@ -25,6 +32,21 @@ export default function Matchup({ matchup, players, showStarters = false, h2hRec
   return (
     <div className="panel panel-hover overflow-hidden">
       <div className="p-4">
+        {/* Playoff game */}
+        {(label || aggregate) && (
+          <div className="mb-3 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-xs">
+            {label && <span className="font-semibold uppercase tracking-wide text-sleeper-accent">{label}</span>}
+            {aggregate && (
+              <span className="text-gray-400">
+                Aggregate{' '}
+                <span className="text-white font-medium tabular-nums">
+                  {aggregate.team1.toFixed(2)} - {aggregate.team2.toFixed(2)}
+                </span>
+              </span>
+            )}
+          </div>
+        )}
+
         {/* H2H Record Banner */}
         {h2hRecord && (h2hRecord.wins > 0 || h2hRecord.losses > 0 || h2hRecord.ties > 0) && (
           <div className="mb-3 pb-3 border-b border-white/[0.06]">
@@ -130,6 +152,13 @@ export default function Matchup({ matchup, players, showStarters = false, h2hRec
                 {team1.starters.map((playerId, idx) => {
                   const player = players[playerId];
                   const points = team1.startersPoints[idx] || 0;
+                  if (playerId === EMPTY_SLOT) {
+                    return (
+                      <div key={`empty-${idx}`} className="flex items-center gap-2 h-6">
+                        <span className="text-xs text-gray-600 italic flex-1">Empty slot</span>
+                      </div>
+                    );
+                  }
                   return (
                     <div key={`${playerId}-${idx}`} className="flex items-center gap-2">
                       <Image
@@ -155,6 +184,13 @@ export default function Matchup({ matchup, players, showStarters = false, h2hRec
                 {team2.starters.map((playerId, idx) => {
                   const player = players[playerId];
                   const points = team2.startersPoints[idx] || 0;
+                  if (playerId === EMPTY_SLOT) {
+                    return (
+                      <div key={`empty-${idx}`} className="flex items-center gap-2 h-6 justify-end">
+                        <span className="text-xs text-gray-600 italic">Empty slot</span>
+                      </div>
+                    );
+                  }
                   return (
                     <div key={`${playerId}-${idx}`} className="flex items-center gap-2 justify-end">
                       <span className="text-xs font-medium text-white tabular-nums">

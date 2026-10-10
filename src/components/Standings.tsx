@@ -6,12 +6,20 @@ import { getTeamName } from '@/lib/utils';
 interface StandingsProps {
   rosters: SleeperRoster[];
   users: SleeperUser[];
+  // Playoff field size from league settings
+  playoffTeams?: number;
 }
 
-export default function Standings({ rosters, users }: StandingsProps) {
+export default function Standings({ rosters, users, playoffTeams = 6 }: StandingsProps) {
+  // Win percentage with ties as half a win, then points for
+  const winPctOf = (r: SleeperRoster) => {
+    const { wins = 0, losses = 0, ties = 0 } = r.settings;
+    const games = wins + losses + ties;
+    return games > 0 ? (wins + ties * 0.5) / games : 0;
+  };
   const sortedRosters = [...rosters].sort((a, b) => {
-    const winsDiff = (b.settings.wins || 0) - (a.settings.wins || 0);
-    if (winsDiff !== 0) return winsDiff;
+    const pctDiff = winPctOf(b) - winPctOf(a);
+    if (pctDiff !== 0) return pctDiff;
 
     const aPoints = (a.settings.fpts || 0) + (a.settings.fpts_decimal || 0) / 100;
     const bPoints = (b.settings.fpts || 0) + (b.settings.fpts_decimal || 0) / 100;
@@ -87,9 +95,8 @@ export default function Standings({ rosters, users }: StandingsProps) {
               const efficiency = maxPF > 0 ? (pf / maxPF * 100) : 0;
               const differential = pf - pa;
 
-              // Determine playoff position styling (top 6 typically make playoffs)
-              const isPlayoffSpot = index < 6;
-              const isOnBubble = index >= 4 && index < 8;
+              // Determine playoff position styling
+              const isPlayoffSpot = index < playoffTeams;
 
               return (
                 <tr

@@ -8,11 +8,13 @@ import {
   getAllPlayers,
   getSeasonWeeklyMatchups,
   getSeasonDraftMap,
+  getTradedPicks,
   pairMatchups,
 } from '@/lib/sleeper';
+import { finalWeek, lastRegularSeasonWeek, scoredThroughWeek, weekLabel } from '@/lib/leagueWeeks';
 import { fetchFantasyCalcValues } from '@/lib/rankings';
 import { generateAllReportCards } from '@/lib/tradeAnalysis';
-import { fetchHistoricalValues, buildPlayerNameMapping } from '@/lib/historicalValues';
+import { fetchHistoricalValues, buildPlayerNameMapping, getCurrentPlayerValue } from '@/lib/historicalValues';
 import { estimateScaleFactor } from '@/lib/vault';
 import { buildTradeValueMap, buildTransactionValueChangeMap } from '@/lib/transactionValues';
 import { FantasyCalcSettings, SleeperTransaction } from '@/lib/types';
@@ -63,48 +65,62 @@ export default async function DashboardPage({ params }: LeaguePageProps) {
       getAllPlayers(),
     ]);
 
-    // Determine the display week based on league status
+    // Determine the display week based on league status. A finished (or
+    // past) season shows its championship week, not the NFL's current week.
     const isPreseason = league.status === 'pre_draft' || league.status === 'drafting';
-    const currentWeek = isPreseason ? 1 : (nflState.week || 1);
+    const lastWeek = finalWeek(league.settings);
+    const isLiveSeason = !isPreseason && league.status !== 'complete' && league.season === nflState.season;
+    const currentWeek = isPreseason
+      ? 1
+      : isLiveSeason
+        ? Math.min(Math.max(nflState.week || 1, 1), lastWeek)
+        : lastWeek;
+    // Awards and luck only use weeks Sleeper has finished scoring
+    const scoredWeeks = Math.min(scoredThroughWeek(league, nflState), lastRegularSeasonWeek(league.settings));
 
     // Get status display text
     const getStatusText = () => {
       if (league.status === 'pre_draft') return 'Pre-Draft';
       if (league.status === 'drafting') return 'Drafting';
       if (league.status === 'complete') return 'Season Complete';
-      return `Week ${currentWeek}`;
+      return weekLabel(league.settings, currentWeek);
     };
-
-    const regularSeasonWeeks = Math.max(1, (league.settings.playoff_week_start || 15) - 1);
-    const [matchups, transactions, weeklyMatchups, draftMap, historicalData] = await Promise.all([
-      getLeagueMatchups(leagueId, currentWeek),
-      getAllSeasonTransactions(leagueId, currentWeek),
-      isPreseason
-        ? Promise.resolve([] as Awaited<ReturnType<typeof getSeasonWeeklyMatchups>>)
-        : getSeasonWeeklyMatchups(leagueId, regularSeasonWeeks),
-      getSeasonDraftMap(leagueId),
-      fetchHistoricalValues(),
-    ]);
-
-    const matchupPairs = pairMatchups(matchups, rosters, users);
-    const luckRows = calculateLuckIndex(weeklyMatchups);
-    const weeklyAwards = calculateWeeklyAwards(weeklyMatchups);
-
-    // Get recent transactions (last 10)
-    const recentTransactions = transactions
-      .sort((a, b) => b.created - a.created)
-      .slice(0, 10);
 
     const settings = deriveLeagueSettings(
       league.roster_positions || [],
       league.scoring_settings || {},
       league.total_rosters
     );
-    const { playerValues, pickValues } = await fetchFantasyCalcValues(settings);
+    const [matchups, transactions, weeklyMatchups, draftMap, historicalData, fcValues, tradedPicks] = await Promise.all([
+      getLeagueMatchups(leagueId, currentWeek),
+      getAllSeasonTransactions(leagueId, isLiveSeason ? currentWeek : lastWeek),
+      isPreseason || scoredWeeks < 1
+        ? Promise.resolve([] as Awaited<ReturnType<typeof getSeasonWeeklyMatchups>>)
+        : getSeasonWeeklyMatchups(leagueId, scoredWeeks),
+      getSeasonDraftMap(leagueId),
+      fetchHistoricalValues(),
+      fetchFantasyCalcValues(settings),
+      getTradedPicks(leagueId).catch(() => []),
+    ]);
+
+    const matchupPairs = pairMatchups(matchups, rosters, users);
+    const luckRows = calculateLuckIndex(weeklyMatchups);
+    const weeklyAwards = calculateWeeklyAwards(weeklyMatchups);
+
+    // Get recent transactions (last 10). Failed waiver claims aren't moves,
+    // and a waiver's place in line is when it processed, not when it was
+    // claimed.
+    const completed = transactions.filter(t => t.status === 'complete');
+    const processedAt = (t: SleeperTransaction) => t.status_updated ?? t.created;
+    const recentTransactions = [...completed]
+      .sort((a, b) => processedAt(b) - processedAt(a))
+      .slice(0, 10);
+
+    const { playerValues, pickValues } = fcValues;
     const playerValuesObj = Object.fromEntries(playerValues);
     const pickValuesObj = Object.fromEntries(pickValues);
     const playerMapping = buildPlayerNameMapping(players, historicalData.playerColumns);
-    const seasonTrades: SleeperTransaction[] = transactions.filter(t => t.type === 'trade');
+    const seasonTrades: SleeperTransaction[] = completed.filter(t => t.type === 'trade');
     // FantasyCalc fallbacks calibrated onto the sheet's scale (see trades page)
     const fcScale = estimateScaleFactor(
       historicalData.values.get(historicalData.dates[0]),
@@ -124,7 +140,17 @@ export default async function DashboardPage({ params }: LeaguePageProps) {
       fcScale
     );
     const tradeValues = buildTradeValueMap(reportCards);
-    const transactionValueChanges = buildTransactionValueChangeMap(recentTransactions, playerValuesObj);
+    // Waiver chips on the same scale as trade chips: the sheet's value, or
+    // FantasyCalc calibrated onto it for untracked players
+    const sheetScaleValues: Record<string, number> = {};
+    for (const t of recentTransactions) {
+      for (const id of [...Object.keys(t.adds || {}), ...Object.keys(t.drops || {})]) {
+        sheetScaleValues[id] =
+          getCurrentPlayerValue(id, historicalData, playerMapping) ??
+          Math.round((playerValues.get(id) ?? 0) * fcScale);
+      }
+    }
+    const transactionValueChanges = buildTransactionValueChangeMap(recentTransactions, sheetScaleValues);
 
     return (
       <div className="space-y-8">
@@ -141,7 +167,11 @@ export default async function DashboardPage({ params }: LeaguePageProps) {
         </div>
 
         {/* Standings - Full Width */}
-        <Standings rosters={rosters} users={users} />
+        <Standings
+          rosters={rosters}
+          users={users}
+          playoffTeams={league.settings.playoff_teams || 6}
+        />
 
         {/* Weekly Awards */}
         {weeklyAwards && (
@@ -149,7 +179,14 @@ export default async function DashboardPage({ params }: LeaguePageProps) {
         )}
 
         {/* Power Rankings */}
-        <PowerRankings rosters={rosters} users={users} players={players} />
+        <PowerRankings
+          rosters={rosters}
+          users={users}
+          players={players}
+          settings={settings}
+          tradedPicks={tradedPicks}
+          draftRounds={league.settings.draft_rounds || 4}
+        />
 
         {/* Luck Index */}
         {luckRows.length > 0 && (
@@ -159,7 +196,7 @@ export default async function DashboardPage({ params }: LeaguePageProps) {
         {/* This Week's Matchups */}
         <div>
           <h2 className="text-xl font-semibold text-white mb-4">
-            {isPreseason ? 'Week 1 Matchups (Preview)' : `Week ${currentWeek} Matchups`}
+            {isPreseason ? 'Week 1 Matchups (Preview)' : `${weekLabel(league.settings, currentWeek)} Matchups`}
           </h2>
           {isPreseason ? (
             <div className="panel p-8 text-center">
@@ -207,6 +244,7 @@ export default async function DashboardPage({ params }: LeaguePageProps) {
       <ErrorState
         title="Error Loading League"
         detail={`Could not load league data for league ${leagueId}. Please check your League ID.`}
+        action={{ href: '/start', label: 'Choose a different league' }}
       />
     );
   }

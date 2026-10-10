@@ -39,7 +39,7 @@ export default function LuckIndex({ rows, rosters, users }: LuckIndexProps) {
           <thead>
             <tr className="text-gray-400 text-left">
               <th className="pb-2 pr-4">Team</th>
-              <th className="pb-2 pr-4 text-center">Record</th>
+              <th className="pb-2 pr-4 text-center" title="Head-to-head games only; median games are not included">H2H Record</th>
               <th className="pb-2 pr-4 text-center">Expected Wins</th>
               <th className="pb-2 text-right">Luck</th>
             </tr>

@@ -651,6 +651,20 @@ export function generateTeamReportCard(
   };
 }
 
+// A trade where some team received only FAAB. FAAB has no market value
+// to set against players and picks, so these can't be graded fairly:
+// selling a 2nd for $380 would read as giving the pick away.
+export function isFaabOnlyTrade(trade: SleeperTransaction): boolean {
+  return trade.roster_ids.some(rosterId => {
+    const gotPlayers = Object.values(trade.adds || {}).some(r => r === rosterId);
+    const gotPicks = (trade.draft_picks || []).some(
+      p => p.owner_id === rosterId && p.previous_owner_id !== rosterId
+    );
+    const gotFaab = (trade.waiver_budget || []).some(b => b.receiver === rosterId && b.amount > 0);
+    return gotFaab && !gotPlayers && !gotPicks;
+  });
+}
+
 // Generate report cards for all teams
 export function generateAllReportCards(
   allTrades: SleeperTransaction[],
@@ -662,17 +676,27 @@ export function generateAllReportCards(
   draftMap: Map<string, DraftedPlayer> | null = null,
   historicalData: HistoricalValueData | null = null,
   playerMapping: Map<string, string> | null = null,
-  fcScale: number = 1
+  fcScale: number = 1,
+  // Who managed each roster when each trade was made (tradeId -> rosterId
+  // -> owner). A card only grades its current manager's trades.
+  ownerAtTrade: Map<string, Map<number, string>> | null = null
 ): TeamReportCard[] {
   const reportCards: TeamReportCard[] = [];
+  const gradable = allTrades.filter(t => !isFaabOnlyTrade(t));
 
   // Built once here; rebuilding per roster is O(teams x trades) of wasted work
-  const pickOwnershipMap = buildPickOwnershipMap(allTrades, draftMap);
+  const pickOwnershipMap = buildPickOwnershipMap(gradable, draftMap);
 
   for (const roster of rosters) {
+    const rosterTrades = ownerAtTrade
+      ? gradable.filter(t => {
+          const owner = ownerAtTrade.get(t.transaction_id)?.get(roster.roster_id);
+          return owner === undefined || owner === roster.owner_id;
+        })
+      : gradable;
     const reportCard = generateTeamReportCard(
       roster.roster_id,
-      allTrades,
+      rosterTrades,
       rosters,
       users,
       players,

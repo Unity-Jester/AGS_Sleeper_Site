@@ -97,6 +97,14 @@ export default async function TradesPage({ params }: LeaguePageProps) {
       playerMapping
     );
 
+    // Each trade's managers, from that season's rosters: report cards only
+    // grade trades the current manager made
+    const ownerAtTrade = new Map<string, Map<number, string>>();
+    for (const season of allSeasonTrades) {
+      const owners = new Map(season.rosters.map(r => [r.roster_id, r.owner_id]));
+      for (const trade of season.trades) ownerAtTrade.set(trade.transaction_id, owners);
+    }
+
     const reportCards = generateAllReportCards(
       allTrades,
       rosters,
@@ -107,7 +115,8 @@ export default async function TradesPage({ params }: LeaguePageProps) {
       draftMap,
       historicalData,
       playerMapping,
-      fcScale
+      fcScale,
+      ownerAtTrade
     );
 
     // Reuse the per-trade analyses already computed for the report cards

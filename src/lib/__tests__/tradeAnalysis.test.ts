@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { analyzeTrade, generateAllReportCards, calculateRawScore } from '../tradeAnalysis';
+import { analyzeTrade, generateAllReportCards, calculateRawScore, isFaabOnlyTrade } from '../tradeAnalysis';
 import {
   SleeperTransaction,
   SleeperRoster,
@@ -220,5 +220,38 @@ describe('cross-source scale calibration', () => {
     const analysis = analyze(trade, 2, PLAYERS, { p1: 1860, p2: 1000 }, {}, emptyPickMap, null, sheet, mapping, 2);
     expect(analysis!.received.totalValue.current).toBe(2000);
     expect(analysis!.given.totalValue.current).toBe(3720);
+  });
+});
+
+describe('report card scope', () => {
+  const rosters = [1, 2].map(i => makeRoster(i, `u${i}`));
+  const users = [1, 2].map(i => makeUser(`u${i}`, `Manager ${i}`));
+
+  it('spots trades where a side received only FAAB', () => {
+    const faabOnly = makeTrade({
+      adds: { p1: 1 },
+      waiver_budget: [{ sender: 1, receiver: 2, amount: 380 }],
+    });
+    const faabSweetener = makeTrade({
+      adds: { p1: 1, p2: 2 },
+      waiver_budget: [{ sender: 1, receiver: 2, amount: 20 }],
+    });
+    expect(isFaabOnlyTrade(faabOnly)).toBe(true);
+    expect(isFaabOnlyTrade(faabSweetener)).toBe(false);
+
+    const cards = generateAllReportCards([faabOnly], rosters, users, PLAYERS, PLAYER_VALUES, PICK_VALUES);
+    expect(cards.every(c => c.totalTrades === 0)).toBe(true);
+  });
+
+  it("grades only the current manager's trades", () => {
+    const trade = makeTrade({ transaction_id: 'old', adds: { p5: 1, p2: 2 } });
+    // Roster 1 was run by someone else when this trade happened
+    const ownerAtTrade = new Map([['old', new Map([[1, 'previous'], [2, 'u2']])]]);
+    const cards = generateAllReportCards(
+      [trade], rosters, users, PLAYERS, PLAYER_VALUES, PICK_VALUES, null, null, null, 1, ownerAtTrade
+    );
+    const byId = new Map(cards.map(c => [c.rosterId, c]));
+    expect(byId.get(1)!.totalTrades).toBe(0);
+    expect(byId.get(2)!.totalTrades).toBe(1);
   });
 });

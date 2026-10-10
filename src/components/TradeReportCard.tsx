@@ -153,7 +153,14 @@ function ReportCard({ card, rank }: { card: ClientReportCard; rank: number }) {
           <p className={`text-lg font-semibold ${card.totalValueGained >= 0 ? 'text-sleeper-green' : 'text-sleeper-red'}`}>
             {formatValue(card.totalValueGained)}
           </p>
-          <p className="text-xs text-gray-500">total net value</p>
+          <p className="text-xs text-gray-500">
+            total net value
+            {card.totalTrades > 0 && (
+              <span className="block tabular-nums">
+                {formatValue(Math.round(card.totalValueGained / card.totalTrades))} per trade
+              </span>
+            )}
+          </p>
         </div>
 
         {/* Grade */}
@@ -282,7 +289,8 @@ export default function TradeReportCards({ reportCards, totalTrades }: TradeRepo
         <div>
           <h2 className="text-xl font-semibold text-white">Trade Report Cards</h2>
           <p className="text-sm text-gray-400">
-            {totalTrades} total trades
+            {totalTrades} total trades &middot; graded on total value gained; trades for
+            only FAAB aren&apos;t graded, and each card covers its current manager&apos;s trades
           </p>
           <p className="text-xs text-gray-500 mt-1">
             Values shown are averages of estimated trade-time value and current value
